@@ -1,0 +1,12 @@
+# Боевые данные клиента — никогда в git
+/data/
+mockup/data.js
+*.xlsx
+!backend/tests/fixtures/demo/*.xlsx
+.env
+node_modules/
+__pycache__/
+.venv/
+
+# Скриншоты на боевых цифрах (до замены на демо)
+docs/screens/

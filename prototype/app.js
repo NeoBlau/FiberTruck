@@ -37,7 +37,15 @@ const saveInput = () => { try { localStorage.setItem('ft-input', JSON.stringify(
 
 /* ---------- модель данных ---------- */
 const V = D.vehicles;
+const displayKey = k => { const m = /^(\d+)([МДФ]?)$/.exec(k); return m ? m[1].padStart(3, '0') + (m[2] ? ' ' + m[2] : '') : k; };
+let VEDIT = {}, AUDIT = [];
+try { VEDIT = JSON.parse(localStorage.getItem('ft-vehicles') || '{}'); AUDIT = JSON.parse(localStorage.getItem('ft-audit') || '[]'); } catch (e) {}
+const applyVehicleEdits = () => Object.entries(VEDIT).forEach(([k, v]) => { V[k] = Object.assign({ key: k, name: displayKey(k) }, D.vehicles[k] || {}, v); });
+applyVehicleEdits();
+const saveFleet = () => { try { localStorage.setItem('ft-vehicles', JSON.stringify(VEDIT)); localStorage.setItem('ft-audit', JSON.stringify(AUDIT.slice(-300))); } catch (e) {} };
 const name = k => (V[k] && V[k].name) || k;
+/* очередь «Проверить»: пункт «без госномера» исчезает, как только номер указан в справочнике */
+const openReview = () => D.review.filter(r => !(r.kind === 'Машина без госномера' && Object.values(V).some(v => v.name === r.value && v.plate)));
 const PROFIT_MONTHS = Array.from({length: 12}, (_, i) => `2026-${String(i+1).padStart(2,'0')}`);
 const pIdx = ym => PROFIT_MONTHS.indexOf(ym);
 const hasProfit = ym => { const i = pIdx(ym); return i >= 0 && D.shared.gen && D.shared.gen[i] != null; };
@@ -145,7 +153,8 @@ const NAV = [
   ['report', 'Отчёт руководителю', 'report', ['admin','viewer']],
   ['-', 'Данные'],
   ['input', 'Загрузка и ввод', 'upload', ['admin','input']],
-  ['review', 'Проверить', 'review', ['admin']],
+  ['fleet', 'Справочник машин', 'truck', ['admin','viewer','input']],
+  ['review', 'Проверить', 'review', ['admin','input']],
   ['settings', 'Настройки', 'settings', ['admin']],
 ];
 const ROLES = { admin: 'Владелец', viewer: 'Руководитель', input: 'Бухгалтер' };
@@ -226,11 +235,11 @@ const allowed = page => { const n = NAV.find(x => x[0] === page); return n && n[
 function go(h) { location.hash = '#/' + h; }
 
 function renderNav(page) {
-  const badge = D.review.filter(r => r.kind !== 'Сумма дней ≠ дней в месяце').length;
-  $('#nav').innerHTML = NAV.map(n => n[0] === '-' ? (ROLE === 'viewer' ? '' : `<div class="nav-label">${n[1]}</div>`) :
+  const badge = openReview().filter(r => r.kind !== 'Сумма дней ≠ дней в месяце').length;
+  $('#nav').innerHTML = NAV.map(n => n[0] === '-' ? `<div class="nav-label">${n[1]}</div>` :
     n[3].includes(ROLE) ? `<a href="#/${n[0]}" class="${page === n[0] || (page === 'car' && n[0] === 'cars') ? 'on' : ''}">${ico(n[2])}${n[1]}${n[0] === 'review' ? `<span class="badge">${badge}</span>` : ''}</a>` : '').join('');
   $('#roleSel').value = ROLE;
-  $('#roleHint').textContent = ROLE === 'input' ? 'Видит только ввод данных за открытые месяцы. Прибыль и итоги ему недоступны.' : ROLE === 'viewer' ? 'Смотрит всё, ничего не меняет.' : 'Полный доступ.';
+  $('#roleHint').textContent = ROLE === 'input' ? 'Ведёт парк: справочник машин, загрузки и ввод за открытые месяцы. Прибыль и итоги ему недоступны.' : ROLE === 'viewer' ? 'Смотрит всё, ничего не меняет.' : 'Полный доступ.';
 }
 function topbar(title, opts = {}) {
   const ym = STATE.ym;
@@ -316,7 +325,7 @@ PAGES.dashboard = () => {
   $('#xls').onclick = exportExcel;
 };
 
-function bindCarRows() { $$('[data-car]').forEach(tr => tr.onclick = () => go('car/' + encodeURIComponent(tr.dataset.car))); }
+function bindCarRows() { $$('[data-car]').forEach(tr => tr.onclick = () => (ROLE === 'input' ? null : go('car/' + encodeURIComponent(tr.dataset.car)))); }
 
 /* ---------- Машины ---------- */
 let CARS_UI = { q: '', make: 'all', loss: false, sort: 'p', dir: -1 };
@@ -618,7 +627,7 @@ PAGES.recon = () => {
       <p class="muted" style="font-size:12px;margin:10px 0 0">Заметок за июль и август в таблице нет. Месяц для заметки «на 1-е число» принят как предыдущий (на 1.02 — январь).</p></div>
     <div class="card panel"><div class="panel-h"><div><h2>5. Отчёт 1С</h2></div></div>${empty('Отчёт не загружен', 'Когда загрузите отчёт с выручкой и расходами (1С или любой другой) через «Загрузка и ввод», здесь появится сверка по строкам.', 'recon')}</div>
   </div>`;
-  $$('tr[data-ym]').forEach(tr => tr.onclick = () => { STATE.ym = tr.dataset.ym; go('car/' + encodeURIComponent(tr.dataset.car)); });
+  $$('tr[data-ym]').forEach(tr => tr.onclick = () => { STATE.ym = tr.dataset.ym; (ROLE === 'input' ? null : go('car/' + encodeURIComponent(tr.dataset.car))); });
 };
 
 /* ---------- Отчёт для руководителя (A4) ---------- */
@@ -663,13 +672,13 @@ PAGES.input = () => {
   let ym = OPEN_MONTHS.includes(STATE.ym) ? STATE.ym : OPEN_MONTHS[0];
   topbar('Загрузка и ввод', { extra: `<div class="seg">${OPEN_MONTHS.map(y => `<button data-iy="${y}" class="${y === ym ? 'on' : ''}">${ymLabel(y)}</button>`).join('')}</div>` });
   $$('[data-iy]').forEach(b => b.onclick = () => { STATE.ym = b.dataset.iy; render(); });
-  const keys = SCHED[ym] ? SCHED[ym].rows.map(r => r.k).filter(k => V[k] && !V[k].history_only) : [];
+  const keys = [...new Set([...(SCHED[ym] ? SCHED[ym].rows.map(r => r.k) : []), ...Object.keys(VEDIT)])].filter(k => V[k] && isActive(k, V[k]));
   const inp = INPUT[ym] || {};
   const done = keys.filter(k => inp[k] && inp[k].km != null && inp[k].rev != null).length;
   const part = keys.filter(k => inp[k] && !(inp[k].km != null && inp[k].rev != null)).length;
   $('#content').innerHTML = `<div class="g21">
     <div class="stack">
-      <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон FiberTrack, отчёт 1С или другой отчёт, график работы, заправки, справочник машин</p></div></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон FiberTrack, отчёт 1С или другой отчёт, график работы, заправки, справочник машин (лист «АВТО»)</p></div></div>
         <label class="drop" id="drop"><input type="file" id="file" hidden accept=".xlsx,.xls,.csv"><span class="ico-circle">${ico('upload', 20)}</span><h3>Перетащите файл сюда</h3><p>или нажмите, чтобы выбрать · xlsx, xls, csv</p></label>
         <div id="preview"></div></div>
       <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода</p></div><div class="spacer"></div><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
@@ -684,7 +693,7 @@ PAGES.input = () => {
       <div class="card panel"><div class="panel-h"><div><h2>Как это работает</h2></div></div>
         <ol style="margin:0;padding-left:18px;color:var(--ink-2);line-height:1.7">
           <li>Скачайте шаблон: в нём уже стоят все машины месяца.</li><li>Заполните пробег, выручку и расходы по статьям, укажите ставку НДС.</li>
-          <li>Перетащите файл в окно слева и проверьте предпросмотр: ошибки подсвечены.</li><li>Нажмите «Применить». Пока месяц открыт, свои записи можно исправить.</li></ol></div>
+          <li>Перетащите файл в окно слева и проверьте предпросмотр: ошибки подсвечены.</li><li>Нажмите «Применить». Пока месяц открыт, данные можно исправить: повторная загрузка шаблона за тот же месяц заменяет прошлую по тем же машинам и статьям, прошлая остаётся в истории.</li></ol></div>
       <div class="card panel"><div class="panel-h"><div><h2>Проверки при вводе</h2></div></div>
         <ul style="margin:0;padding-left:18px;color:var(--ink-2);line-height:1.7"><li>Пробег от ${int(S.kmMin)} до ${int(S.kmMax)} км в месяц</li><li>Расход от ${S.lMin} до ${S.lMax} л/100 км</li><li>Дни — не больше, чем дней в месяце</li><li>Нет дублей: машина + статья + документ</li><li>При ставке «без НДС» сумма НДС = 0</li></ul></div>
       <div class="note" style="margin:0">${ico('info')}<div>Это прототип: файлы разбирает сервер в рабочей версии. Ручной ввод здесь сохраняется только в этом браузере.</div></div>
@@ -733,12 +742,110 @@ function openEntry(ym, k) {
 PAGES.review = () => {
   topbar('Проверить');
   const groups = {};
-  D.review.forEach(r => (groups[r.kind] = groups[r.kind] || []).push(r));
-  const hint = { 'Машина без госномера': 'Укажите госномер в справочнике машин — тогда номер сопоставится автоматически.', 'Дубль машины в графике': 'В одном месяце машина записана дважды. Проверьте, какая строка верная.', 'Сумма дней ≠ дней в месяце': 'Итоги по статусам в строке не складываются в число дней месяца.' };
+  openReview().forEach(r => (groups[r.kind] = groups[r.kind] || []).push(r));
+  const hint = { 'Машина без госномера': 'Укажите госномер в <a href="#/fleet" style="color:var(--teal-ink)">справочнике машин</a>: после этого пункт исчезнет, а номер будет сопоставляться автоматически.', 'Дубль машины в графике': 'В одном месяце машина записана дважды. Проверьте, какая строка верная.', 'Сумма дней ≠ дней в месяце': 'Итоги по статусам в строке не складываются в число дней месяца.' };
   $('#content').innerHTML = `<div class="note">${ico('info')}<div>Здесь всё, что программа не стала угадывать при импорте. Пока пункт не разобран, данные по нему не попадают в расчёты (кроме ручных итогов дней — они взяты как есть).</div></div>
     <div class="stack">${Object.entries(groups).map(([kind, list]) => `<div class="card panel"><div class="panel-h"><div><h2>${kind}</h2><p>${hint[kind] || ''}</p></div><div class="spacer"></div><span class="chip warn">${list.length}</span></div>
       <div class="tbl-wrap" style="max-height:320px"><table><thead><tr><th>Значение</th><th class="l">Где</th><th class="l">Что сделано</th><th></th></tr></thead><tbody>${list.map(r => `<tr><td><b>${esc(r.value)}</b></td><td class="l">${esc(r.where)}</td><td class="l muted">${esc(r.action)}</td><td><button class="btn" onclick="this.closest('tr').style.opacity=.4;this.textContent='Разобрано';this.disabled=true">Разобрать</button></td></tr>`).join('')}</tbody></table></div></div>`).join('')}</div>`;
 };
+
+
+/* ---------- Справочник машин ---------- */
+const PLATE_RE = /^[АВЕКМНОРСТУХ]\d{3}[АВЕКМНОРСТУХ]{2}\d{2,3}$/;
+const LAT2CYR = { A: 'А', B: 'В', E: 'Е', K: 'К', M: 'М', H: 'Н', O: 'О', P: 'Р', C: 'С', T: 'Т', Y: 'У', X: 'Х' };
+const normPlate = s => String(s || '').toUpperCase().replace(/\s+/g, '').replace(/[ABEKMHOPCTYX]/g, c => LAT2CYR[c]);
+const MAKES = ['FAW', 'MAN', 'DAF', 'SCANIA', 'MERCEDES', 'OTHER'];
+const FIELDS = { plate: 'Госномер', make: 'Марка', model: 'Модель', year: 'Год выпуска', trailer: 'Прицеп', trailer_model: 'Модель прицепа', trailer_year: 'Год прицепа', amort: 'Амортизация в месяц', from: 'В парке с', to: 'Выведена', active: 'Активна' };
+let FLEET_UI = { q: '', show: 'active' };
+const isActive = (k, v) => v.active !== undefined ? v.active : !v.history_only && !v.to;
+PAGES.fleet = () => {
+  const canEdit = ROLE !== 'viewer';
+  topbar('Справочник машин', { extra: canEdit ? `<button class="btn primary" id="addCar">+ Добавить машину</button>` : '' });
+  const keys = Object.keys(V).sort((a, b) => name(a).localeCompare(name(b), 'ru', { numeric: true }));
+  const draw = () => {
+    const q = FLEET_UI.q.trim().toLowerCase();
+    const list = keys.filter(k => { const v = V[k]; const act = isActive(k, v);
+      return (FLEET_UI.show === 'all' || (FLEET_UI.show === 'active' ? act : FLEET_UI.show === 'noplate' ? !v.plate && act : !act)) && (!q || `${v.name} ${v.plate || ''} ${v.model || ''} ${v.trailer || ''}`.toLowerCase().includes(q)); });
+    $('#fleetTable').innerHTML = list.length ? `<table><thead><tr><th>Машина</th><th class="l">Госномер</th><th class="l">Модель</th><th>Год</th><th class="l col-m">Прицеп</th><th class="col-m">Амортизация</th><th class="l">Статус</th>${canEdit ? '<th></th>' : ''}</tr></thead><tbody>
+      ${list.map(k => { const v = V[k]; const act = isActive(k, v); return `<tr class="${canEdit ? 'click' : ''}" data-fk="${esc(k)}"><td><span class="car">${esc(v.name)}</span>${VEDIT[k] ? ' <span class="chip" title="Изменено вручную">изм.</span>' : ''}</td>
+        <td class="l">${v.plate ? esc(v.plate) : '<span class="chip warn">нет госномера</span>'}</td><td class="l">${esc(v.model || '—')}</td><td>${v.year || '—'}</td>
+        <td class="l col-m">${v.trailer ? esc(v.trailer) + `<div class="plate">${esc(v.trailer_model || '')}</div>` : '—'}</td><td class="col-m">${v.amort ? rub(v.amort) : '—'}</td>
+        <td class="l"><span class="status-dot" style="background:${act ? 'var(--st-T)' : 'var(--border-strong)'}"></span>${act ? 'в работе' : 'выведена' + (v.to ? ' с ' + esc(v.to) : '')}</td>${canEdit ? '<td><button class="btn">Изменить</button></td>' : ''}</tr>`; }).join('')}</tbody></table>`
+      : empty('Ничего не найдено', 'Измените поиск или фильтр.', 'search');
+    if (canEdit) $$('[data-fk]').forEach(tr => tr.onclick = () => editCar(tr.dataset.fk));
+  };
+  const nopl = keys.filter(k => !V[k].plate && isActive(k, V[k])).length;
+  $('#content').innerHTML = `${nopl ? `<div class="note warn">${ico('info')}<div>У ${nopl} машин нет госномера — без него не сопоставляются выгрузки 1С и топливных карт.</div></div>` : ''}
+    <div class="toolbar"><label class="search">${ico('search')}<input id="fq" type="text" placeholder="Номер, госномер, модель, прицеп" value="${esc(FLEET_UI.q)}" aria-label="Поиск"></label>
+      ${[['active', 'В работе'], ['noplate', 'Без госномера'], ['out', 'Выведены'], ['all', 'Все']].map(([v, t]) => `<button class="pill ${FLEET_UI.show === v ? 'on' : ''}" data-fs="${v}">${t}</button>`).join('')}</div>
+    <div class="stack"><div class="card"><div class="tbl-wrap" id="fleetTable" style="max-height:640px"></div></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Журнал изменений</h2><p>кто, что и когда менял в справочнике</p></div></div>
+        ${AUDIT.length ? `<div class="tbl-wrap" style="max-height:360px"><table><tbody>${AUDIT.slice().reverse().slice(0, 60).map(a => `<tr><td class="l" style="white-space:normal"><b>${esc(a.car)}</b> · ${esc(a.field)}<div class="plate">${esc(a.before ?? '—')} → <b style="color:var(--ink)">${esc(a.after ?? '—')}</b></div></td><td class="muted" style="font-size:12px">${esc(a.who)}<br>${esc(a.at)}</td></tr>`).join('')}</tbody></table></div>`
+          : empty('Изменений пока нет', 'Здесь появится каждая правка: кто изменил, что было и что стало.')}</div></div>`;
+  $('#fq').oninput = e => { FLEET_UI.q = e.target.value; draw(); };
+  $$('[data-fs]').forEach(b => b.onclick = () => { FLEET_UI.show = b.dataset.fs; $$('[data-fs]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  if (canEdit) $('#addCar').onclick = () => editCar(null);
+  draw();
+};
+function editCar(k) {
+  const isNew = !k, v = isNew ? { make: 'FAW' } : V[k];
+  const inp = (id, label, val, attrs = '') => `<label>${label}<input id="${id}" ${attrs} value="${esc(val ?? '')}"><span class="err" id="${id}-e"></span></label>`;
+  $('#modal').innerHTML = `<div class="card modal fade" role="dialog" aria-modal="true" aria-labelledby="ct"><h2 id="ct">${isNew ? 'Новая машина' : 'Машина ' + esc(v.name)}</h2><p class="muted" style="margin:0">Изменения сразу видны во всех отчётах и попадают в журнал</p>
+    <div class="form">
+      ${inp('f-short', 'Короткий номер', isNew ? '' : v.name, `type="text" placeholder="например, 885 или 308 М" ${isNew ? '' : 'disabled'}`)}
+      ${inp('f-plate', 'Госномер', v.plate, 'type="text" placeholder="Т970ОН58"')}
+      <label>Марка<select class="inp" id="f-make">${MAKES.map(m => `<option ${v.make === m ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
+      ${inp('f-model', 'Модель', v.model, 'type="text" placeholder="FAW J7 EURO 6"')}
+      ${inp('f-year', 'Год выпуска', v.year, 'type="number" min="1990"')}
+      ${inp('f-amort', 'Амортизация в месяц, ₽', v.amort, 'type="number" min="0" step="1000"')}
+      ${inp('f-trailer', 'Прицеп (госномер)', v.trailer, 'type="text" placeholder="АН 9275/58"')}
+      ${inp('f-tmodel', 'Модель прицепа', v.trailer_model, 'type="text"')}
+      ${inp('f-from', 'В парке с', v.from, 'type="date"')}
+      ${inp('f-to', 'Выведена из парка', v.to, 'type="date"')}
+      <label class="full" style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" id="f-active" ${isActive(k, v) ? 'checked' : ''}> Машина в работе (попадает в шаблон месяца)</label>
+    </div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px"><button class="btn" id="mc">Отмена</button><button class="btn primary" id="ms">Сохранить</button></div></div>`;
+  $('#modal').classList.add('open');
+  (isNew ? $('#f-short') : $('#f-plate')).focus();
+  const close = () => $('#modal').classList.remove('open');
+  $('#mc').onclick = close; $('#modal').onclick = e => { if (e.target.id === 'modal') close(); };
+  document.onkeydown = e => { if (e.key === 'Escape') close(); };
+  $('#ms').onclick = () => {
+    $$('.err', $('#modal')).forEach(e => e.textContent = '');
+    let ok = true; const err = (id, t) => { $('#' + id + '-e').textContent = t; ok = false; };
+    let key = k;
+    if (isNew) {
+      const m = /^0*(\d{1,3})\s*([МДФ]?)$/i.exec($('#f-short').value.trim().toUpperCase());
+      if (!m) err('f-short', 'Номер из 1–3 цифр, при двойнике — буква М, Д или Ф');
+      else { key = String(Number(m[1])) + (m[2] || ''); if (V[key]) err('f-short', `Машина ${displayKey(key)} уже есть в справочнике`); }
+    }
+    const plate = normPlate($('#f-plate').value);
+    if (plate && !PLATE_RE.test(plate)) err('f-plate', 'Формат: буква, 3 цифры, 2 буквы, регион — например Т970ОН58');
+    const dup = plate && Object.entries(V).find(([kk, vv]) => kk !== key && vv.plate === plate);
+    if (dup) err('f-plate', `Этот госномер уже у машины ${dup[1].name}`);
+    const year = $('#f-year').value ? Number($('#f-year').value) : null;
+    if (year != null && (year < 1990 || year > TODAY.getFullYear() + 1)) err('f-year', `Год от 1990 до ${TODAY.getFullYear() + 1}`);
+    const amort = $('#f-amort').value ? Number($('#f-amort').value) : null;
+    if (amort != null && amort < 0) err('f-amort', 'Не может быть отрицательной');
+    const from = $('#f-from').value || null, to = $('#f-to').value || null;
+    if (from && to && to < from) err('f-to', 'Дата вывода раньше даты ввода');
+    if (!ok) return;
+    const after = { plate: plate || null, make: $('#f-make').value, model: $('#f-model').value.trim() || null, year, amort, trailer: $('#f-trailer').value.trim().toUpperCase() || null,
+      trailer_model: $('#f-tmodel').value.trim() || null, from, to, active: $('#f-active').checked };
+    const before = isNew ? {} : V[key];
+    const who = ROLES[ROLE], at = new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    let changes = 0;
+    for (const f of Object.keys(after)) {
+      const b = f === 'active' ? isActive(key, before) : before[f] ?? null, a = after[f];
+      if (String(b ?? '') !== String(a ?? '')) { changes++; const fmt = x => f === 'active' ? (x ? 'да' : 'нет') : f === 'amort' && x != null ? rub(x) : x; AUDIT.push({ at, who, car: displayKey(key), field: FIELDS[f], before: fmt(b), after: fmt(a) }); }
+    }
+    if (!changes) { close(); return; }
+    if (isNew) AUDIT.push({ at, who, car: displayKey(key), field: 'Машина добавлена', before: null, after: plate || '' });
+    VEDIT[key] = Object.assign(VEDIT[key] || {}, after);
+    applyVehicleEdits(); saveFleet(); close();
+    toast(isNew ? `Машина ${displayKey(key)} добавлена` : `${displayKey(key)}: сохранено`); render();
+  };
+}
 
 /* ---------- Настройки ---------- */
 PAGES.settings = () => {
@@ -854,7 +961,7 @@ function render() {
   if (!PAGES[page]) page = ROLE === 'input' ? 'input' : 'dashboard';
   if (!allowed(page)) {
     renderNav(page); topbar('Нет доступа');
-    $('#content').innerHTML = empty('Этот раздел вам недоступен', ROLE === 'input' ? 'Бухгалтер работает только в разделе «Загрузка и ввод». Если нужно больше — обратитесь к владельцу.' : 'Раздел доступен только владельцу.', 'review') + `<p style="text-align:center"><a class="btn" href="#/${ROLE === 'input' ? 'input' : 'dashboard'}">Перейти в доступный раздел</a></p>`;
+    $('#content').innerHTML = empty('Этот раздел вам недоступен', ROLE === 'input' ? 'Бухгалтеру доступны справочник машин, загрузка и ввод, очередь «Проверить». Прибыль и отчёты смотрят владелец и руководитель.' : 'Раздел доступен только владельцу.', 'review') + `<p style="text-align:center"><a class="btn" href="#/${ROLE === 'input' ? 'input' : 'dashboard'}">Перейти в доступный раздел</a></p>`;
     return;
   }
   renderNav(page);

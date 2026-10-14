@@ -94,7 +94,14 @@ sudo ss -tlnp | grep -E ':80 |:443 '
 ```
 
 - **Пусто** — ставьте как в разделе «Деплой на VPS».
-- **Занято** (nginx, Apache и т. п.) — запустите FiberTrack без своего Caddy:
+- **Занято nginx** — проще всего готовым скриптом. Он ставит Docker, если его нет, запускает FiberTrack на `127.0.0.1:8001`,
+  добавляет в nginx отдельный конфиг только для домена FiberTrack и получает HTTPS-сертификат:
+  ```bash
+  sudo bash deploy/install-behind-nginx.sh fibertrack.ваш-домен.ru
+  ```
+  Ваш сайт скрипт не трогает. Если nginx уже с ошибкой, домен занят другим конфигом или новый конфиг не проходит
+  `nginx -t`, скрипт останавливается и ничего не меняет. Повторный запуск обновляет FiberTrack и сохраняет данные.
+- **Занято чем-то другим или хотите вручную** — запустите FiberTrack без своего Caddy:
   ```bash
   docker compose -f docker-compose.yml -f deploy/docker-compose.behind-proxy.yml up -d
   ```

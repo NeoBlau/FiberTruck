@@ -16,3 +16,4 @@ prototype/dist/
 backups/
 backend/shots/
 dist/
+.credentials

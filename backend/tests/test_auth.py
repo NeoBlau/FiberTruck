@@ -49,3 +49,23 @@ def test_everything_except_login_and_health_requires_session():
                          ('/api/review/1/resolve', 'post')]:
         assert c.request(method.upper(), path, json={} if method != 'get' else None).status_code == 401, path
     assert c.get('/api/health').status_code == 200
+
+
+def test_init_users_creates_three_roles_once():
+    from app.cli import init_users
+    from app.db import SessionLocal
+    from app.models import User
+    from sqlalchemy import delete
+    with SessionLocal() as db:
+        db.execute(delete(User))
+        db.commit()
+    first = init_users()
+    assert [(r[0], r[1]) for r in first] == [('owner', 'admin'), ('boss', 'viewer'), ('buh', 'input')]
+    assert all(r[3] and len(r[3]) == 19 for r in first)
+    for login, _, _, pw in first:
+        assert TestClient(app).post('/api/auth/login', json={'login': login, 'password': pw}).status_code == 200
+    again = init_users()
+    assert all(r[3] is None for r in again)            # повторный запуск пароли не меняет
+    reset = init_users(reset=True)
+    assert reset[0][3] != first[0][3]
+    assert TestClient(app).post('/api/auth/login', json={'login': 'owner', 'password': first[0][3]}).status_code == 401

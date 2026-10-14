@@ -65,6 +65,13 @@ for i in $(seq 1 60); do
   sleep 2
 done
 ok "FiberTrack отвечает на 127.0.0.1:$PORT"
+USERS_OUT="$("${COMPOSE[@]}" exec -T backend python -m app.cli init-users)"
+if grep -q 'пароль: ' <<<"$USERS_OUT"; then
+  (umask 077; printf '%s\n' "$USERS_OUT" > .credentials)
+  ok "созданы пользователи владельца, руководителя и бухгалтера (пароли — в конце)"
+else
+  ok "пользователи уже есть — пароли не менял"
+fi
 
 say "5/6 Подключаю к nginx домен $DOMAIN"
 if [ -d /etc/nginx/sites-enabled ]; then
@@ -134,10 +141,8 @@ cat <<EOF
 Готово. FiberTrack: https://$DOMAIN
 
 Дальше (из папки $(pwd)):
-  1) пользователи (пароль спросит):
-     ${COMPOSE[*]} exec backend python -m app.cli create-user owner admin "Владелец"
-     ${COMPOSE[*]} exec backend python -m app.cli create-user boss viewer "Руководитель"
-     ${COMPOSE[*]} exec backend python -m app.cli create-user buh input "Бухгалтер"
+  1) $( [ -f .credentials ] && echo "логины и пароли (сохранены в $(pwd)/.credentials — перепишите себе и удалите файл: rm .credentials):" || echo "пользователи уже были; сбросить все пароли: ${COMPOSE[*]} exec backend python -m app.cli init-users --reset" )
+$( [ -f .credentials ] && sed 's/^/     /' .credentials )
   2) история: положите xlsx в $(pwd)/data, затем
      chmod 644 data/*.xlsx
      ${COMPOSE[*]} exec backend python -m app.cli import-history "/data/прибыль_по_машинам.xlsx" "/data/парк.xlsx"

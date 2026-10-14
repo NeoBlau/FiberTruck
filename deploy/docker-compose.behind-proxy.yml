@@ -1,0 +1,8 @@
+# Режим «на сервере уже есть сайт» (nginx/Apache занимает 80 и 443).
+# Свой Caddy не запускается, FiberTrack слушает только 127.0.0.1:8001 — снаружи напрямую недоступен.
+# Запуск:  docker compose -f docker-compose.yml -f deploy/docker-compose.behind-proxy.yml up -d
+services:
+  backend:
+    ports: ["127.0.0.1:${FT_PORT:-8001}:8000"]
+  caddy:
+    profiles: ["disabled"]

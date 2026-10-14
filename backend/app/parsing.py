@@ -1,16 +1,13 @@
-"""Сборка данных для HTML-прототипа FiberTrack из исходных xlsx заказчика.
+"""Разбор исходных xlsx заказчика: «прибыль по машинам» и «парк».
 
-Запуск:  python3 -I prototype/build_data.py <прибыль.xlsx> <парк.xlsx> <out.json>
-
-Ничего не угадывает: всё, что не сопоставилось, попадает в список review.
+parse_sources() возвращает машины, график, прибыль, общие расходы, заправки, сводку простоев
+и список того, что не сопоставилось (review). Ничего не угадывает.
 """
 from __future__ import annotations
 
 import calendar
 import datetime as dt
-import json
 import re
-import sys
 from collections import Counter, defaultdict
 
 import openpyxl
@@ -288,7 +285,8 @@ def parse_idle_history(wb):
     return out
 
 
-def main(profit_path, park_path, out_path):
+def parse_sources(profit_path, park_path) -> dict:
+    review.clear()
     wb = openpyxl.load_workbook(park_path, data_only=True)
     cars_p, shared, bench = parse_profit(profit_path)
     sched = parse_schedule(wb)
@@ -333,7 +331,6 @@ def main(profit_path, park_path, out_path):
 
     # ---- месяцы графика
     sched_out = []
-    days_ym = {}
     for b in sched:
         ym = f"{b['y']}-{b['m']:02d}"
         rows = []
@@ -345,59 +342,16 @@ def main(profit_path, park_path, out_path):
                                'where': f"{MONTHS_RU[b['m'] - 1]} {b['y']}, строка {r['row']}",
                                'action': f"в итогах {sum(tot.values())} дн. из {nd}"})
             rows.append({'k': r['key'], 'c': r['codes'], 'tot': tot, 'calc': r['calc'],
-                         'tx': r['texts'] if b['y'] == 2026 else None})
+                         'tx': r['texts'], 'row': r['row'], 'raw': r['raw']})
         sched_out.append({'ym': ym, 'rows': rows, 'manual': any(r['tot'] for r in b['rows'])})
 
-    # словарь текстов для 2026 (экономим объём)
-    dic, idx = [], {}
-    for mth in sched_out:
-        for r in mth['rows']:
-            if r['tx'] is not None:
-                coded = []
-                for t in r['tx']:
-                    if t is None:
-                        coded.append(None)
-                        continue
-                    if t not in idx:
-                        idx[t] = len(dic)
-                        dic.append(t)
-                    coded.append(idx[t])
-                r['tx'] = coded
-
-    # ---- топливо: помесячно + по дням (только 2026)
-    fuel_month = defaultdict(lambda: defaultdict(lambda: {'rn': 0.0, 'e100': 0.0, 'gl': 0.0, 'gl_days': 0, 'card_days': 0, 'anomaly': 0}))
-    for k, days in fuel_daily.items():
-        for d, (rn, e1, gl) in days.items():
-            ym = d[:7]
-            f = fuel_month[ym][k]
-            f['rn'] += rn
-            f['e100'] += e1
-            if rn or e1:
-                f['card_days'] += 1
-            if gl > 1500:  # больше 1 500 л в сутки не бывает: похоже, внесены километры
-                f['anomaly'] += 1
-            elif gl > 0:
-                f['gl'] += gl
-                f['gl_days'] += 1
-
-    out = {
-        'generated': dt.date.today().isoformat(),
+    return {
         'vehicles': vehicles,
         'profit': {k: v['p'] for k, v in cars_p.items()},
         'shared': shared,
         'bench': bench,
         'schedule': sched_out,
-        'textdic': dic,
-        'fuel_month': {ym: dict(v) for ym, v in fuel_month.items()},
         'fuel_daily': {k: v for k, v in fuel_daily.items()},
         'idle_hist': idle_hist,
-        'review': review,
+        'review': list(review),
     }
-    with open(out_path, 'w', encoding='utf-8') as f:
-        json.dump(out, f, ensure_ascii=False, separators=(',', ':'))
-    print('машин:', len(vehicles), 'месяцев графика:', len(sched_out), 'на проверку:', len(review),
-          'топливо машин:', len(fuel_daily), 'размер:', round(len(json.dumps(out, ensure_ascii=False)) / 1024), 'КБ')
-
-
-if __name__ == '__main__':
-    main(*sys.argv[1:4])

@@ -1,0 +1,7 @@
+# SITE_ADDRESS=fibertrack.example.ru — Caddy сам получит HTTPS-сертификат Let's Encrypt.
+# SITE_ADDRESS=:80 — запуск на своём компьютере по http://localhost.
+{$SITE_ADDRESS} {
+	encode zstd gzip
+	header -Server
+	reverse_proxy backend:8000
+}

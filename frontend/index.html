@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B1F3A">
+<title>FiberTrack</title>
+<meta name="description" content="FiberTrack — рентабельность автопарка">
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+</head>
+<body>
+<div class="app">
+  <aside class="side" id="side" aria-label="Навигация">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 4.5h10.5M3 9h7.5M3 13.5h4.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="14" cy="12.5" r="2.4" fill="#14C8B4"/></svg></div>
+      <div class="wordmark">Fiber<b>Track</b></div>
+    </div>
+    <nav class="nav" id="nav"></nav>
+    <div class="side-foot">
+      <div class="role">
+        <div style="font-weight:600" id="userName"></div>
+        <small id="userRole" style="margin-top:2px"></small>
+        <small id="roleHint"></small>
+        <button class="btn" id="logout" style="margin-top:10px;width:100%;justify-content:center">Выйти</button>
+      </div>
+    </div>
+  </aside>
+  <main class="main">
+    <header class="top" id="top"></header>
+    <div class="content" id="content"><div class="kpis"><div class="card kpi"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:24px;width:80%;margin-top:14px"></div></div><div class="card kpi"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:24px;width:80%;margin-top:14px"></div></div><div class="card kpi"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:24px;width:80%;margin-top:14px"></div></div><div class="card kpi"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:24px;width:80%;margin-top:14px"></div></div><div class="card kpi"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:24px;width:80%;margin-top:14px"></div></div><div class="card kpi"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:24px;width:80%;margin-top:14px"></div></div></div></div>
+  </main>
+</div>
+<div class="modal-bg" id="modal"></div>
+<div class="tipbox" id="tip" role="tooltip"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

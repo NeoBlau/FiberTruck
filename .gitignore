@@ -11,3 +11,7 @@ __pycache__/
 # Скриншоты на боевых цифрах (до замены на демо)
 docs/screens/
 prototype/dist/
+
+.env
+backups/
+backend/shots/

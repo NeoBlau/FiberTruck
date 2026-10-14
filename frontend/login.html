@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0B1F3A">
+<title>Вход · FiberTrack</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<style>
+.login-wrap{min-height:100vh;display:grid;place-items:center;padding:24px 16px}
+.login{width:min(380px,100%);padding:28px}
+.login .brand{padding:0 0 22px}
+.login h1{font-size:20px;margin-bottom:4px}
+.login p{margin:0 0 18px;color:var(--ink-3)}
+.login label{display:grid;gap:6px;font-size:13px;color:var(--ink-2);margin-bottom:14px}
+.login input{border:1px solid var(--border);background:var(--surface);border-radius:9px;padding:10px 12px;font-size:15px}
+.login .btn{width:100%;justify-content:center;padding:11px;font-size:14.5px}
+.login .err{display:block;min-height:18px;margin:-4px 0 10px;font-size:13px}
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <form class="card login fade" id="f" autocomplete="on">
+    <div class="brand"><div class="mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 4.5h10.5M3 9h7.5M3 13.5h4.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="14" cy="12.5" r="2.4" fill="#14C8B4"/></svg></div><div class="wordmark">Fiber<b>Track</b></div></div>
+    <h1>Вход</h1>
+    <p>Рентабельность автопарка</p>
+    <label>Логин<input name="login" id="login" autocomplete="username" required autocapitalize="none" spellcheck="false"></label>
+    <label>Пароль<input name="password" id="password" type="password" autocomplete="current-password" required></label>
+    <span class="err" id="err" role="alert"></span>
+    <button class="btn primary" id="go" type="submit">Войти</button>
+  </form>
+</div>
+<script>
+try { const t = localStorage.getItem('ft-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+document.getElementById('login').focus();
+document.getElementById('f').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('go'), err = document.getElementById('err');
+  btn.disabled = true; err.textContent = '';
+  try {
+    const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'same-origin',
+      body: JSON.stringify({ login: document.getElementById('login').value, password: document.getElementById('password').value }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || 'Не удалось войти');
+    location.href = data.role === 'input' ? '/#/input' : '/';
+  } catch (x) { err.textContent = x.message === 'Failed to fetch' ? 'Нет связи с сервером' : x.message; btn.disabled = false; }
+});
+</script>
+</body>
+</html>

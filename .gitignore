@@ -15,3 +15,4 @@ prototype/dist/
 .env
 backups/
 backend/shots/
+dist/

@@ -79,7 +79,8 @@ if grep -rqs "server_name[^;]*\b$DOMAIN\b" /etc/nginx/sites-enabled /etc/nginx/c
   die "Домен $DOMAIN уже описан в другом конфиге nginx. Выберите другой поддомен."
 fi
 HAD_CERT=0
-grep -qs 'ssl_certificate' "$CONF" && HAD_CERT=1
+# сертификат уже выпущен именно для этого домена — конфиг не переписываем; домен сменился — пишем заново
+grep -qs 'ssl_certificate' "$CONF" && grep -qs "server_name $DOMAIN;" "$CONF" && HAD_CERT=1
 LISTEN6=""
 ss -tln | grep -q '\[::\]:80 ' && LISTEN6="    listen [::]:80;"
 if [ "$HAD_CERT" = 0 ]; then

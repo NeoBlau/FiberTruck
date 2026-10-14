@@ -36,7 +36,13 @@
    docker compose up -d
    ```
    Первый запуск занимает несколько минут: скачиваются образы и собирается сервер.
-5. Заведите пользователей. Пароль программа спросит; он должен быть не короче 10 символов.
+5. Заведите пользователей. Проще всего — сразу всех трёх ролей со случайными паролями:
+   ```bash
+   docker compose exec backend python -m app.cli init-users
+   ```
+   Команда покажет логины `owner` (владелец), `boss` (руководитель) и `buh` (бухгалтер) и пароли, один раз.
+   Повторный запуск пароли не меняет; `init-users --reset` выдаёт всем новые.
+   Можно и по одному, со своим логином (пароль спросит, не короче 10 символов):
    ```bash
    docker compose exec backend python -m app.cli create-user owner admin "Иван Петров"
    docker compose exec backend python -m app.cli create-user boss viewer "Руководитель"

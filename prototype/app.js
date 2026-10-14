@@ -138,6 +138,7 @@ const ICON = {
   prev: '<path d="M10 3L5 8l5 5"/>', next: '<path d="M6 3l5 5-5 5"/>',
   moon: '<path d="M13.5 9.5A5.5 5.5 0 0 1 6.5 2.5a5.5 5.5 0 1 0 7 7z"/>',
   info: '<circle cx="8" cy="8" r="6.5"/><path d="M8 7v4M8 4.8v.2"/>',
+  cal: '<rect x="2" y="3" width="12" height="11" rx="2"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/>',
   menu: '<path d="M2 4h12M2 8h12M2 12h12"/>', dl: '<path d="M8 2v8.5M5 7.5l3 3 3-3M2.5 11v2.5h11V11"/>'
 };
 const ico = (n, sz = 16) => `<svg width="${sz}" height="${sz}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${ICON[n]}</svg>`;
@@ -153,6 +154,7 @@ const NAV = [
   ['report', 'Отчёт руководителю', 'report', ['admin','viewer']],
   ['-', 'Данные'],
   ['input', 'Загрузка и ввод', 'upload', ['admin','input']],
+  ['periods', 'Месяцы', 'cal', ['admin']],
   ['fleet', 'Справочник машин', 'truck', ['admin','viewer','input']],
   ['review', 'Проверить', 'review', ['admin','input']],
   ['settings', 'Настройки', 'settings', ['admin']],
@@ -667,12 +669,25 @@ PAGES.report = () => {
 };
 
 /* ---------- Загрузка и ввод ---------- */
-const OPEN_MONTHS = ['2026-09', '2026-10'];
+/* ---------- периоды: владелец открывает и закрывает месяцы ---------- */
+let PERIODS = {};
+try { PERIODS = JSON.parse(localStorage.getItem('ft-periods') || '{}'); } catch (e) {}
+const savePeriods = () => { try { localStorage.setItem('ft-periods', JSON.stringify(PERIODS)); } catch (e) {} };
+const CUR_YM = `${TODAY.getFullYear()}-${String(TODAY.getMonth() + 1).padStart(2, '0')}`;
+/* по умолчанию: месяцы с внесённой прибылью закрыты, остальные до текущего включительно — открыты, будущие — не начаты */
+const periodStatus = ym => PERIODS[ym] || (hasProfit(ym) ? 'closed' : ym <= CUR_YM ? 'open' : 'future');
+const PERIOD_YMS = () => { const out = []; let y = '2026-01'; const last = nextYm(nextYm(nextYm(CUR_YM))); while (y <= last) { out.push(y); y = nextYm(y); } return out; };
+const openMonths = () => PERIOD_YMS().filter(y => periodStatus(y) === 'open');
+/* машины месяца: из графика, а для месяца без графика — все машины в работе */
+const LAST_SCHED = SCHED_YMS[SCHED_YMS.length - 1];
+const monthCars = ym => [...new Set([...(SCHED[ym] ? SCHED[ym].rows.map(r => r.k) : SCHED[LAST_SCHED].rows.map(r => r.k)), ...Object.keys(VEDIT)])].filter(k => V[k] && isActive(k, V[k]));
 PAGES.input = () => {
-  let ym = OPEN_MONTHS.includes(STATE.ym) ? STATE.ym : OPEN_MONTHS[0];
-  topbar('Загрузка и ввод', { extra: `<div class="seg">${OPEN_MONTHS.map(y => `<button data-iy="${y}" class="${y === ym ? 'on' : ''}">${ymLabel(y)}</button>`).join('')}</div>` });
+  const OPEN = openMonths();
+  if (!OPEN.length) { topbar('Загрузка и ввод'); $('#content').innerHTML = empty('Нет открытых месяцев', ROLE === 'admin' ? 'Откройте месяц на экране <a href="#/periods" style="color:var(--teal-ink)">«Месяцы»</a>.' : 'Все месяцы закрыты. Попросите владельца открыть нужный месяц.', 'upload'); return; }
+  let ym = OPEN.includes(STATE.ym) ? STATE.ym : OPEN[OPEN.length - 1];
+  topbar('Загрузка и ввод', { extra: `<div class="seg">${OPEN.map(y => `<button data-iy="${y}" class="${y === ym ? 'on' : ''}">${ymLabel(y)}</button>`).join('')}</div>` });
   $$('[data-iy]').forEach(b => b.onclick = () => { STATE.ym = b.dataset.iy; render(); });
-  const keys = [...new Set([...(SCHED[ym] ? SCHED[ym].rows.map(r => r.k) : []), ...Object.keys(VEDIT)])].filter(k => V[k] && isActive(k, V[k]));
+  const keys = monthCars(ym);
   const inp = INPUT[ym] || {};
   const done = keys.filter(k => inp[k] && inp[k].km != null && inp[k].rev != null).length;
   const part = keys.filter(k => inp[k] && !(inp[k].km != null && inp[k].rev != null)).length;
@@ -681,7 +696,7 @@ PAGES.input = () => {
       <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон FiberTrack, отчёт 1С или другой отчёт, график работы, заправки, справочник машин (лист «АВТО»)</p></div></div>
         <label class="drop" id="drop"><input type="file" id="file" hidden accept=".xlsx,.xls,.csv"><span class="ico-circle">${ico('upload', 20)}</span><h3>Перетащите файл сюда</h3><p>или нажмите, чтобы выбрать · xlsx, xls, csv</p></label>
         <div id="preview"></div></div>
-      <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода</p></div><div class="spacer"></div><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода${SCHED[ym] ? '' : ' · графика ещё нет, в списке все машины в работе'}</p></div><div class="spacer"></div><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
         <div style="display:flex;align-items:center;gap:12px;margin:6px 0 14px"><div class="progress" style="flex:1"><span style="width:${keys.length ? done / keys.length * 100 : 0}%"></span></div><b class="num">Внесено ${done} из ${keys.length}</b></div>
         <div class="tbl-wrap" style="max-height:440px"><table><thead><tr><th>Машина</th><th>Пробег, км</th><th>Выручка</th><th>Расходы</th><th>Статус</th><th></th></tr></thead><tbody>
         ${keys.map(k => { const x = inp[k] || {}; const st = x.km != null && x.rev != null ? ['внесено', 'var(--st-T)'] : x.km != null || x.rev != null ? ['частично', 'var(--st-I)'] : ['не внесено', 'var(--border-strong)'];
@@ -749,6 +764,31 @@ PAGES.review = () => {
       <div class="tbl-wrap" style="max-height:320px"><table><thead><tr><th>Значение</th><th class="l">Где</th><th class="l">Что сделано</th><th></th></tr></thead><tbody>${list.map(r => `<tr><td><b>${esc(r.value)}</b></td><td class="l">${esc(r.where)}</td><td class="l muted">${esc(r.action)}</td><td><button class="btn" onclick="this.closest('tr').style.opacity=.4;this.textContent='Разобрано';this.disabled=true">Разобрать</button></td></tr>`).join('')}</tbody></table></div></div>`).join('')}</div>`;
 };
 
+
+/* ---------- Месяцы (открытие и закрытие) ---------- */
+PAGES.periods = () => {
+  topbar('Месяцы');
+  const ST_LABEL = { open: ['открыт', 'pos'], closed: ['закрыт', ''], future: ['не начат', 'warn'] };
+  const rows = PERIOD_YMS().slice().reverse().map(ym => {
+    const st = periodStatus(ym), keys = monthCars(ym), inp = INPUT[ym] || {};
+    const done = keys.filter(k => inp[k] && inp[k].km != null && inp[k].rev != null).length;
+    const fill = hasProfit(ym) ? 'прибыль внесена (таблица прибыли)' : `внесено ${done} из ${keys.length}`;
+    const btn = st === 'open' ? `<button class="btn" data-close="${ym}">Закрыть</button>` : st === 'closed' ? `<button class="btn" data-reopen="${ym}">Переоткрыть</button>` : `<button class="btn primary" data-open="${ym}">Открыть для ввода</button>`;
+    return `<tr><td><b>${ymLabel(ym)}</b>${ym === CUR_YM ? ' <span class="chip">текущий</span>' : ''}</td><td class="l"><span class="chip ${ST_LABEL[st][1]}">${ST_LABEL[st][0]}</span></td><td class="l muted">${fill}</td><td>${btn}</td></tr>`;
+  }).join('');
+  $('#content').innerHTML = `<div class="note">${ico('info')}<div><b>Как это работает.</b> Бухгалтер вносит данные только в открытые месяцы. Закрытый месяц не меняется: цифры в отчётах фиксируются. Новый месяц можно открыть заранее — например, ноябрь, чтобы бухгалтер начал вносить первые документы. В рабочей версии текущий месяц будет открываться сам 1-го числа.</div></div>
+    <div class="card"><div class="tbl-wrap"><table><thead><tr><th>Месяц</th><th class="l">Статус</th><th class="l">Заполнение</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  const log = (ym, a, b, why) => { AUDIT.push({ at: new Date().toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }), who: ROLES[ROLE], car: ymLabel(ym), field: 'Статус месяца' + (why ? ` (${why})` : ''), before: a, after: b }); saveFleet(); };
+  $$('[data-open]').forEach(b => b.onclick = () => { const ym = b.dataset.open; PERIODS[ym] = 'open'; savePeriods(); log(ym, 'не начат', 'открыт'); toast(`${ymLabel(ym)} открыт для ввода`); render(); });
+  $$('[data-close]').forEach(b => b.onclick = () => {
+    const ym = b.dataset.close, keys = monthCars(ym), inp = INPUT[ym] || {};
+    const left = keys.filter(k => !(inp[k] && inp[k].km != null && inp[k].rev != null)).length;
+    if (!confirm(`Закрыть ${ymLabel(ym).toLowerCase()}?${left ? `\n\nНе внесено по ${left} машинам из ${keys.length}.` : ''}\nПосле закрытия бухгалтер не сможет менять данные за этот месяц.`)) return;
+    PERIODS[ym] = 'closed'; savePeriods(); log(ym, 'открыт', 'закрыт'); toast(`${ymLabel(ym)} закрыт`); render(); });
+  $$('[data-reopen]').forEach(b => b.onclick = () => {
+    const ym = b.dataset.reopen; const why = prompt(`Причина переоткрытия: ${ymLabel(ym).toLowerCase()}`); if (!why || !why.trim()) return;
+    PERIODS[ym] = 'open'; savePeriods(); log(ym, 'закрыт', 'открыт', why.trim()); toast(`${ymLabel(ym)} снова открыт`); render(); });
+};
 
 /* ---------- Справочник машин ---------- */
 const PLATE_RE = /^[АВЕКМНОРСТУХ]\d{3}[АВЕКМНОРСТУХ]{2}\d{2,3}$/;

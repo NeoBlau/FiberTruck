@@ -5,7 +5,7 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ .
 COPY frontend/ /app/frontend/
-RUN useradd -r -u 1001 ft && chown -R ft /app
+RUN mkdir -p /app/backend/uploads && useradd -r -u 1001 ft && chown -R ft /app
 USER ft
 EXPOSE 8000
 # миграции при старте, затем сервер

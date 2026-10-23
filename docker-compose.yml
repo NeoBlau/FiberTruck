@@ -25,6 +25,7 @@ services:
       FT_FRONTEND_DIR: ../frontend
     volumes:
       - ./data:/data:ro          # сюда кладутся xlsx для импорта истории
+      - uploads:/app/backend/uploads   # загруженные через программу файлы
 
   caddy:
     image: caddy:2-alpine
@@ -53,5 +54,6 @@ services:
 
 volumes:
   db-data:
+  uploads:
   caddy-data:
   caddy-config:

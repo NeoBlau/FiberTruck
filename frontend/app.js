@@ -641,7 +641,7 @@ PAGES.fuel = () => {
   const over = rows.filter(r => r.flag === 'over').length;
   const flagHtml = r => r.flag === 'over' ? `<span class="chip neg">${r.diff > 0 ? 'карта больше' : 'ГЛОНАСС больше'}</span>` : r.flag === 'anom' ? `<span class="chip warn" title="В ГЛОНАСС за сутки больше ${S.glonassMax} л — похоже, внесены километры">проверить ГЛОНАСС</span>` : r.flag === 'nogl' ? '<span class="chip">нет ГЛОНАСС</span>' : '<span class="ok">в норме</span>';
   $('#content').innerHTML = `<div class="note">${ico('info')}<div>Данные — из листа «Анализ ЗАПРАВОК» (литры, ${ymLabel(fyms[0]).toLowerCase()} — ${ymLabel(fyms[fyms.length - 1]).toLowerCase()}). Сумм в рублях и пробега там нет, поэтому л/100 км и руб/км появятся после ввода пробега и загрузки выгрузок РН-Карт / Е100. Порог расхождения — ${S.fuelPct}%${ROLE === 'admin' ? ', меняется в <a href="#/settings" style="color:var(--teal-ink)">настройках</a>' : ''}.</div></div>
-    <section class="kpis k5" style="grid-template-columns:repeat(4,minmax(0,1fr))">
+    <section class="kpis k4">
       <article class="card kpi"><div class="lbl">Заправлено по картам</div><div class="val">${int(totCard)}<span class="u">л</span></div><div class="delta">${rows.length} машин</div></article>
       <article class="card kpi"><div class="lbl">Сравнимо с ГЛОНАСС</div><div class="val">${cmp.length}<span class="u">маш.</span></div><div class="delta">у остальных нет данных ГЛОНАСС</div></article>
       <article class="card kpi"><div class="lbl">Расхождение больше ${S.fuelPct}%</div><div class="val ${over ? 'neg-ink' : ''}">${over}<span class="u">маш.</span></div><div class="delta">карта против ГЛОНАСС</div></article>

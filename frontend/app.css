@@ -97,6 +97,7 @@ h1,h2,h3{margin:0;letter-spacing:-.015em}
 
 .kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px}
 .kpis.k5{grid-template-columns:repeat(5,minmax(0,1fr))}
+.kpis.k4{grid-template-columns:repeat(4,minmax(0,1fr))}
 .kpi{padding:16px 16px 14px;min-height:118px;display:flex;flex-direction:column;transition:box-shadow .2s}
 .kpi:hover{box-shadow:var(--shadow-hover)}
 .kpi .lbl{color:var(--ink-2);font-size:12.5px;font-weight:500}
@@ -237,7 +238,9 @@ input:focus,select:focus,button:focus-visible{outline:2px solid color-mix(in srg
   .top h1{font-size:16px}
   .hide-m{display:none!important}
   .content{padding:14px 16px 40px}
-  .kpis,.kpis.k5{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .kpis,.kpis.k5,.kpis.k4{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .card.panel{overflow-x:auto}
+  .search{flex:1 1 100%}
   .kpi{min-height:106px;padding:14px}
   .kpi .val{font-size:19px}
   .chart{height:260px}

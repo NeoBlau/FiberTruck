@@ -17,3 +17,4 @@ backups/
 backend/shots/
 dist/
 .credentials
+backend/uploads/

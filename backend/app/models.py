@@ -95,6 +95,7 @@ class ScheduleMonth(Base):
     totals: Mapped[dict | None] = mapped_column(JSON)    # ручные итоги диспетчера
     calc: Mapped[dict] = mapped_column(JSON)             # пересчёт по ячейкам
     source_row: Mapped[int | None] = mapped_column(Integer)
+    upload_id: Mapped[int | None] = mapped_column(ForeignKey('uploads.id', ondelete='SET NULL'), index=True)
     vehicle: Mapped[Vehicle] = relationship()
     __table_args__ = (UniqueConstraint('ym', 'vehicle_id'),)
 
@@ -111,7 +112,9 @@ class Operation(Base):
     vat_kop: Mapped[int] = mapped_column(BigInteger, default=0)
     vat_rate: Mapped[str | None] = mapped_column(String(16))         # '22%' … 'без НДС'; NULL — не выделен
     vat_mode: Mapped[str] = mapped_column(String(8))                 # gross / net / unknown
-    source: Mapped[str] = mapped_column(String(16))                  # import / manual / template / 1c
+    source: Mapped[str] = mapped_column(String(16))                  # import / manual / template / upload
+    document: Mapped[str | None] = mapped_column(String(128))
+    upload_id: Mapped[int | None] = mapped_column(ForeignKey('uploads.id', ondelete='SET NULL'), index=True)
     entered_by: Mapped[int | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     __table_args__ = (CheckConstraint('amount_net_kop + vat_kop = amount_gross_kop', name='operations_vat_check'),)
@@ -125,6 +128,7 @@ class Mileage(Base):
     km: Mapped[int | None] = mapped_column(Integer)
     worked_days: Mapped[int | None] = mapped_column(Integer)          # если машины нет в графике
     source: Mapped[str] = mapped_column(String(16), default='manual')
+    upload_id: Mapped[int | None] = mapped_column(ForeignKey('uploads.id', ondelete='SET NULL'), index=True)
     entered_by: Mapped[int | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
     __table_args__ = (UniqueConstraint('ym', 'vehicle_id'),)
 
@@ -137,6 +141,7 @@ class FuelDay(Base):
     rn_l: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=0)
     e100_l: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=0)
     glonass_l: Mapped[Decimal] = mapped_column(Numeric(12, 3), default=0)
+    upload_id: Mapped[int | None] = mapped_column(ForeignKey('uploads.id', ondelete='SET NULL'), index=True)
     __table_args__ = (UniqueConstraint('vehicle_id', 'date'),)
 
 
@@ -172,6 +177,30 @@ class ReviewItem(Base):
     action: Mapped[str] = mapped_column(Text)
     resolved_by: Mapped[int | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
     resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    upload_id: Mapped[int | None] = mapped_column(ForeignKey('uploads.id', ondelete='SET NULL'))
+
+
+class Upload(Base):
+    """Загруженный файл: предпросмотр → «Применить» → при необходимости откат владельцем."""
+    __tablename__ = 'uploads'
+    id: Mapped[int] = mapped_column(primary_key=True)
+    kind: Mapped[str] = mapped_column(String(16))                     # template / profit / park
+    filename: Mapped[str] = mapped_column(String(255))
+    sha256: Mapped[str] = mapped_column(String(64), index=True)
+    size: Mapped[int] = mapped_column(Integer)
+    path: Mapped[str] = mapped_column(String(512))
+    months: Mapped[list] = mapped_column(JSON, default=list)          # какие месяцы меняет
+    status: Mapped[str] = mapped_column(String(16), default='parsed')  # parsed / applied / rolled_back / discarded
+    preview: Mapped[dict] = mapped_column(JSON)                       # то, что видел пользователь
+    plan: Mapped[dict] = mapped_column(JSON)                          # что именно будет применено
+    backup: Mapped[dict | None] = mapped_column(JSON)                 # что было до применения (для отката)
+    uploaded_by: Mapped[int | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
+    uploaded_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    applied_by: Mapped[int | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
+    applied_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    rolled_back_by: Mapped[int | None] = mapped_column(ForeignKey('users.id', ondelete='SET NULL'))
+    rolled_back_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("status in ('parsed','applied','rolled_back','discarded')", name='uploads_status_check'),)
 
 
 class Setting(Base):

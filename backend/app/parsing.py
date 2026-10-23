@@ -17,6 +17,16 @@ MONTHS_RU = ['январь', 'февраль', 'март', 'апрель', 'ма
 review: list[dict] = []
 
 
+def grid(ws) -> list[list]:
+    """Весь лист списком строк одинаковой длины — в разы быстрее, чем ws.cell() по одной ячейке."""
+    mc = ws.max_column
+    out = []
+    for row in ws.iter_rows(values_only=True):
+        row = list(row)
+        out.append(row + [None] * (mc - len(row)) if len(row) < mc else row)
+    return out
+
+
 def norm(v) -> str:
     return re.sub(r'\s+', ' ', str(v).replace('\xa0', ' ').strip().upper())
 
@@ -96,11 +106,21 @@ def label_field(lab: str) -> str | None:
     return None
 
 
-def parse_schedule(wb):
+SCHEDULE_SHEET = re.compile(r'^\s*(20\d\d|\d{2}\.\d{2}\.20\d\d)\s*$')
+
+
+def schedule_sheets(wb) -> list[str]:
+    """Листы графика: по договорённости называются годом («2025») или датой выгрузки («02.10.2026»)."""
+    return [n for n in wb.sheetnames if SCHEDULE_SHEET.match(n)]
+
+
+def parse_schedule(wb, only_check: bool = False):
+    if only_check:
+        return bool(schedule_sheets(wb))
     months = []  # [{y,m,rows:[{key,raw,codes,texts,tot}]}]
-    for name in ['2023', '2024', '2025', '02.10.2026']:
+    for name in schedule_sheets(wb):
         ws = wb[name]
-        g = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)] for r in range(1, ws.max_row + 1)]
+        g = grid(ws)
         mc = ws.max_column
         cur = None
         for i, row in enumerate(g):
@@ -167,10 +187,31 @@ def parse_schedule(wb):
     return months
 
 
-def parse_profit(path):
-    ws = openpyxl.load_workbook(path, data_only=True)['Лист1']
+def find_profit_sheet(wb):
+    """Лист таблицы прибыли: строка заголовка с «январь» … «декабрь» и «амортизация»."""
+    for ws in wb.worksheets:
+        for r in range(1, min(ws.max_row, 15) + 1):
+            row = [norm(ws.cell(r, c).value) for c in range(1, min(ws.max_column, 20) + 1)]
+            if 'ЯНВАРЬ' in row and any(x.startswith('АМОРТИЗАЦИЯ') for x in row):
+                return ws, r
+    return None, None
+
+
+def profit_year(ws, header_row: int) -> int:
+    for r in range(1, header_row + 1):
+        m = re.search(r'(20\d\d)', str(ws.cell(r, 1).value or ''))
+        if m:
+            return int(m.group(1))
+    return dt.date.today().year
+
+
+def parse_profit(path_or_wb):
+    wb = path_or_wb if hasattr(path_or_wb, 'worksheets') else openpyxl.load_workbook(path_or_wb, data_only=True)
+    ws, header = find_profit_sheet(wb)
+    if ws is None:
+        ws, header = wb['Лист1'], 5
     cars, shared, notes = {}, {}, []
-    for r in range(6, ws.max_row + 1):
+    for r in range(header + 1, ws.max_row + 1):
         a = ws.cell(r, 1).value
         if a is None:
             continue
@@ -178,7 +219,7 @@ def parse_profit(path):
         s = norm(a)
         if s in ('ТРАКТОР', 'ОБЩЕХОЗ', 'СЕРВИС', 'АМОРТИЗАЦИЯ', 'ОБЩИЙ'):
             shared[{'ТРАКТОР': 'tractor', 'ОБЩЕХОЗ': 'gen', 'СЕРВИС': 'service', 'АМОРТИЗАЦИЯ': 'amort', 'ОБЩИЙ': 'total'}[s]] = \
-                [int(v) if isinstance(v, (int, float)) else None for v in vals]
+                [round(v, 2) if isinstance(v, (int, float)) else None for v in vals]
             continue
         if s.startswith('СЕБЕСТОИМОСТЬ') or s.startswith('СРЕДНЯЯ'):
             notes.append(str(a).strip())
@@ -186,7 +227,7 @@ def parse_profit(path):
         if isinstance(a, (int, float)) or re.fullmatch(r'\d+\s*[МДФ]?', s):
             key = car_key(a)
             cars[key] = {'label': str(a), 'amort': ws.cell(r, 2).value,
-                         'p': [int(v) if isinstance(v, (int, float)) else None for v in vals]}
+                         'p': [round(v, 2) if isinstance(v, (int, float)) else None for v in vals]}
     # заметки: «себестоимость на 1.02.26 — 61 руб/км» относится к январю
     bench = {}
     for n in notes:
@@ -212,6 +253,12 @@ def parse_profit(path):
             if v:
                 bench.setdefault(month, {})['rate'] = float(v.group(1).replace(',', '.'))
     return cars, shared, bench
+
+
+def parse_profit_year(path_or_wb) -> int:
+    wb = path_or_wb if hasattr(path_or_wb, 'worksheets') else openpyxl.load_workbook(path_or_wb, data_only=True)
+    ws, header = find_profit_sheet(wb)
+    return profit_year(ws, header) if ws is not None else dt.date.today().year
 
 
 def parse_avto(wb):
@@ -247,7 +294,7 @@ def parse_avto(wb):
 
 def parse_fuel(wb):
     ws = wb['Анализ ЗАПРАВОК']
-    g = [[ws.cell(r, c).value for c in range(1, ws.max_column + 1)] for r in range(1, ws.max_row + 1)]
+    g = grid(ws)
     mc = ws.max_column
     hdr = [i for i, row in enumerate(g) if sum(1 for v in row if v == 'Дата') >= 2]
     daily = defaultdict(dict)  # key -> date -> [rn, e100, gl]

@@ -32,9 +32,9 @@ def test_input_validation():
     assert r.status_code == 422 and 'km' in r.json()['detail']
     r = u.put('/api/input/2026-10/885', json={'days': 32})
     assert r.status_code == 422 and 'days' in r.json()['detail']
-    r = u.put('/api/input/2026-10/885', json={'rev': 100, 'vat': 'без НДС', 'gross': True})
+    r = u.put('/api/input/2026-10/885', json={'amounts': {'revenue': 100}, 'vat': 'без НДС', 'gross': True})
     assert r.status_code == 422
-    r = u.put('/api/input/2026-10/885', json={'fuel': -5})
+    r = u.put('/api/input/2026-10/885', json={'amounts': {'fuel': -5}})
     assert r.status_code == 422
 
 
@@ -44,11 +44,11 @@ def test_vat_split_and_replace_on_resave():
     from app.db import SessionLocal
     from app.models import Operation
     u = login('input')
-    assert u.put('/api/input/2026-10/885', json={'km': 11200, 'rev': 12200, 'vat': '22%', 'gross': True}).status_code == 200
-    assert u.put('/api/input/2026-10/885', json={'km': 11300, 'rev': 10000, 'vat': '22%', 'gross': False}).status_code == 200
+    assert u.put('/api/input/2026-10/885', json={'km': 11200, 'amounts': {'revenue': 12200}, 'vat': '22%', 'gross': True}).status_code == 200
+    assert u.put('/api/input/2026-10/885', json={'km': 11300, 'amounts': {'revenue': 10000}, 'vat': '22%', 'gross': False}).status_code == 200
     with SessionLocal() as db:
         ops = list(db.scalars(select(Operation).where(Operation.source == 'manual')))
     assert len(ops) == 1                                    # повторное сохранение заменило прежнее
     assert (ops[0].amount_gross_kop, ops[0].amount_net_kop, ops[0].vat_kop) == (12200_00, 10000_00, 2200_00)
     e = u.get('/api/bootstrap').json()['input']['2026-10']['885']
-    assert e['km'] == 11300 and e['rev'] == 10000 and e['gross'] is False
+    assert e['km'] == 11300 and e['amounts']['revenue'] == 10000 and e['gross'] is False

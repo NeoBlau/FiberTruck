@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     login_max_failures: int = 5             # неудачных попыток …
     login_window_minutes: int = 15          # … за это окно → пауза на то же окно
     frontend_dir: str = '../frontend'
+    upload_dir: str = 'uploads'             # загруженные файлы (в Docker — отдельный том)
+    upload_max_mb: int = 20
     timezone: str = 'Europe/Samara'
 
 

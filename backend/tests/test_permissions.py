@@ -17,9 +17,16 @@ MATRIX = {
     ('POST', '/api/periods/{ym}/reopen'): {'admin'},
     ('PUT', '/api/input/{ym}/{key}'): {'admin', 'input'},
     ('POST', '/api/review/{item_id}/resolve'): {'admin', 'input'},
+    ('POST', '/api/uploads'): {'admin', 'input'},
+    ('GET', '/api/uploads'): {'admin', 'input'},
+    ('GET', '/api/uploads/{upload_id}'): {'admin', 'input'},
+    ('POST', '/api/uploads/{upload_id}/apply'): {'admin', 'input'},
+    ('POST', '/api/uploads/{upload_id}/discard'): {'admin', 'input'},
+    ('POST', '/api/uploads/{upload_id}/rollback'): {'admin'},
+    ('GET', '/api/template/{ym}'): {'admin', 'input'},
 }
 OPEN_TO_ALL = {('POST', '/api/auth/login'), ('POST', '/api/auth/logout'), ('GET', '/api/auth/me'), ('GET', '/api/bootstrap'), ('GET', '/api/health')}
-SAMPLE = {'{key}': '885', '{ym}': '2026-12', '{item_id}': '1'}
+SAMPLE = {'{key}': '885', '{ym}': '2026-12', '{item_id}': '1', '{upload_id}': '1'}
 
 
 def api_routes():
@@ -40,7 +47,7 @@ def test_route_permissions(route, allowed, role):
     method, path = route
     for k, v in SAMPLE.items():
         path = path.replace(k, v)
-    r = login(role).request(method, path, json={})
+    r = login(role).request(method, path, json={} if method != 'GET' else None)
     if role in allowed:
         assert r.status_code != 403, f'{role} должен иметь доступ к {method} {path}: {r.text}'
     else:
@@ -50,7 +57,7 @@ def test_route_permissions(route, allowed, role):
 def test_input_role_gets_no_aggregates():
     d = login('input').get('/api/bootstrap').json()
     assert d['profit'] == {} and d['shared'] == {} and d['fuel_month'] == {} and d['idle_hist'] == {} and d['bench'] == {}
-    assert d['textdic'] == []
+    assert d['textdic'] == [] and d['fin'] == {} and d['km'] == {} and d['profit_months'] == []
     # от графика — только состав машин, без статусов по дням и итогов
     assert all(set(r) == {'k'} for m in d['schedule'] for r in m['rows'])
     raw = json.dumps(d, ensure_ascii=False)

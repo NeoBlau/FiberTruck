@@ -261,3 +261,23 @@ input:focus,select:focus,button:focus-visible{outline:2px solid color-mix(in srg
   .content{padding:0;max-width:none}
   .a4{box-shadow:none;border-radius:0;margin:0;width:210mm;height:297mm;overflow:hidden}
 }
+
+/* загрузки */
+.spinner{width:16px;height:16px;border-radius:50%;border:2px solid var(--border-strong);border-top-color:var(--teal);animation:spin .8s linear infinite;flex:none}
+@keyframes spin{to{transform:rotate(360deg)}}
+.upl{margin-top:14px;border:1px solid var(--border);border-radius:var(--radius);padding:14px}
+.upl-h{display:flex;gap:10px;align-items:flex-start}
+.upl-s{margin-top:16px}
+.upl-st{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.upl-st h3{font-size:14px;font-weight:620}
+.upl-st .chips{display:flex;gap:6px;flex-wrap:wrap}
+.upl-n{margin:4px 0 8px;font-size:12.5px;color:var(--ink-2)}
+.upl-t td,.upl-t th{padding:7px 8px;font-size:12.5px}
+.upl-t tr.r-error td{background:var(--neg-bg)}
+.upl-t tr.r-error .upl-note{color:var(--neg);font-weight:600}
+.upl-t tr.r-warn td{background:var(--warn-bg)}
+.upl-t tr.r-skip td{color:var(--ink-3)}
+.upl-t tr.upl-hide{display:none}
+.upl-note{white-space:normal;min-width:180px}
+.upl-a{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.upl-sub{font-size:11px;font-weight:600;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;margin-top:6px}

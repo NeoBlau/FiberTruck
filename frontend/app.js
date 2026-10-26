@@ -48,7 +48,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
 /* ---------- настройки (в рабочей версии — на сервере) ---------- */
-const DEFAULTS = { alloc: 'days', groups: [2013, 2017, 2021], fuelPct: 10, glonassMax: 1500, kmMin: 0, kmMax: 20000, lMin: 20, lMax: 45 };
+const DEFAULTS = { alloc: 'days', groups: [2013, 2017, 2021], fuelPct: 10, glonassMax: 1500, kmMin: 0, kmMax: 30000, lMin: 20, lMax: 45 };
 const S = Object.assign({}, DEFAULTS, D.settings || {});
 const ROLE = D.me.role;
 const INPUT = D.input || {};
@@ -79,21 +79,25 @@ const finCar = (ym, k) => FIN[ym] && FIN[ym].cars[k] ? FIN[ym].cars[k][NET() ? '
 const sumArts = (o, pred) => o ? Object.entries(o).filter(([a]) => pred(a)).reduce((s, [, v]) => s + v, 0) : 0;
 const carIncome = (ym, k) => sumArts(finCar(ym, k), a => INCOME_ARTS.includes(a));
 const carExpense = (ym, k) => sumArts(finCar(ym, k), a => !INCOME_ARTS.includes(a));
-const histProfit = (ym, k) => { const i = pIdx(ym); const a = D.profit[k]; return i < 0 || !a ? null : a[i]; };
-const histMonth = ym => { const i = pIdx(ym); return i >= 0 && D.shared.gen && D.shared.gen[i] != null; };
+const histProfit = (ym, k) => { if (finMonth(ym)) return null; const i = pIdx(ym); const a = D.profit[k]; return i < 0 || !a ? null : a[i]; };
+const histMonth = ym => { if (finMonth(ym)) return false; const i = pIdx(ym); return i >= 0 && D.shared.gen && D.shared.gen[i] != null; };
 const hasProfit = ym => histMonth(ym) || hasFin(ym);
 const kmOf = (ym, k) => (KM[ym] || {})[k] ?? null;
+/* отработанные дни: из шаблона бухгалтера, иначе по графику */
+const workedOf = (ym, k) => ((D.wdays || {})[ym] || {})[k] ?? (daysOf(ym, k) || {}).worked;
 const kmTotal = ym => Object.values(KM[ym] || {}).reduce((s, v) => s + (v || 0), 0);
 const revenueOf = ym => hasFin(ym) ? Object.keys(FIN[ym].cars).reduce((s, k) => s + carIncome(ym, k), 0) : null;
+/* месяц считается по шаблону, когда в нём есть хотя бы половина машин: тогда он главнее таблицы прибыли */
+const finMonth = ym => hasFin(ym) && Object.keys(FIN[ym].cars).length * 2 >= monthCarCount(ym);
 const monthCarCount = ym => SCHED[ym] ? SCHED[ym].rows.length : Object.keys(D.profit).length;
 const ART_NAMES = { revenue: 'Выручка от перевозок', other_income: 'Прочий доход', fuel: 'Топливо', repair: 'Ремонт и запчасти', maintenance: 'ТО', tires: 'Шины', salary: 'Зарплата водителей', per_diem: 'Суточные', tolls: 'Дороги и «Платон»', insurance: 'Страхование', leasing: 'Лизинг / кредит', wash: 'Мойка', fines: 'Штрафы', other: 'Прочее' };
 const REP_YEAR = () => ((UI.STATE && UI.STATE.ym) || D.generated).slice(0, 4);
-const PROFIT_YMS = PROFIT_MONTHS.filter(hasProfit);
 const SCHED = Object.fromEntries(D.schedule.map(m => [m.ym, m]));
+const PROFIT_YMS = PROFIT_MONTHS.filter(hasProfit);
 const SCHED_YMS = D.schedule.map(m => m.ym);
 const ALL_YMS = [...new Set([...SCHED_YMS, ...PROFIT_YMS])].sort();
 /* месяц по умолчанию: последний, где прибыль из таблицы или введено хотя бы по половине машин */
-const isComplete = ym => histMonth(ym) || (hasFin(ym) && Object.keys(FIN[ym].cars).length * 2 >= monthCarCount(ym));
+const isComplete = ym => histMonth(ym) || finMonth(ym);
 const LAST_PROFIT = [...PROFIT_YMS].reverse().find(isComplete) || PROFIT_YMS[PROFIT_YMS.length - 1];
 /* месяцы для годовых графиков и «с начала года»: год выбранного месяца, только заполненные месяцы */
 const YEAR_YMS = () => PROFIT_YMS.filter(y => isComplete(y) && y.startsWith(REP_YEAR()));
@@ -137,7 +141,7 @@ const sumCars = ym => carsWithProfit(ym).reduce((s, k) => s + profitRaw(ym, k), 
 /* общие расходы со знаком «минус»: из таблицы прибыли и из шаблона; амортизация без таблицы — сумма по машинам */
 const sharedOf = (ym, f) => {
   const i = pIdx(ym);
-  const h = D.shared[f] && i >= 0 ? D.shared[f][i] : null;
+  const h = D.shared[f] && i >= 0 && !finMonth(ym) ? D.shared[f][i] : null;
   if (h != null) return h;
   if (!hasFin(ym)) return 0;
   if (f === 'amort') return -carsWithProfit(ym).reduce((s, k) => s + ((V[k] && V[k].amort) || 0), 0);
@@ -146,7 +150,7 @@ const sharedOf = (ym, f) => {
 };
 const fleetTotal = ym => {
   const i = pIdx(ym);
-  const h = D.shared.total && i >= 0 ? D.shared.total[i] : null;
+  const h = D.shared.total && i >= 0 && !finMonth(ym) ? D.shared.total[i] : null;
   if (h != null) return h;
   return hasFin(ym) ? sumCars(ym) + ['tractor', 'gen', 'service', 'amort'].reduce((s, f) => s + sharedOf(ym, f), 0) : null;
 };
@@ -164,7 +168,7 @@ function allocation(ym) {
   const carAm = keys.reduce((s, k) => s + am(k), 0);
   const residual = sharedOf(ym, 'amort') + carAm;          // разница между строкой «амортизация» и суммой по машинам
   const pool = sharedOf(ym, 'tractor') + sharedOf(ym, 'gen') + sharedOf(ym, 'service') + residual;
-  const w = Object.fromEntries(keys.map(k => [k, S.alloc === 'equal' ? 1 : ((daysOf(ym, k) || {}).worked || 0)]));
+  const w = Object.fromEntries(keys.map(k => [k, S.alloc === 'equal' ? 1 : S.alloc === 'km' ? (kmOf(ym, k) || 0) : (workedOf(ym, k) || 0)]));
   let W = keys.reduce((s, k) => s + w[k], 0);
   if (!W) { keys.forEach(k => w[k] = 1); W = keys.length; }
   const out = {};
@@ -397,7 +401,7 @@ PAGES.dashboard = () => {
       areaStyle: { color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [{ offset: 0, color: css('--s-up') + '33' }, { offset: 1, color: css('--s-up') + '00' }]) } }]
   });
   if (hasProfit(ym)) {
-    const rows = carsWithProfit(ym).map(k => ({ k, p: carProfit(ym, k), d: (daysOf(ym, k) || {}).worked, s: YEAR_YMS().map(y => carProfit(y, k)) })).sort((a, b) => b.p - a.p);
+    const rows = carsWithProfit(ym).map(k => ({ k, p: carProfit(ym, k), d: workedOf(ym, k), s: YEAR_YMS().map(y => carProfit(y, k)) })).sort((a, b) => b.p - a.p);
     const tbl = list => `<table><thead><tr><th>Машина</th><th>Прибыль</th><th class="col-m">Раб. дней</th><th>На раб. день</th><th>${REP_YEAR()}</th></tr></thead><tbody>${list.map((r, i) =>
       `<tr class="click" data-car="${r.k}"><td><span class="car"><span class="rank">${i + 1}</span>${name(r.k)}</span></td><td class="${r.p < 0 ? 'neg-ink' : ''}">${rub(r.p)}</td><td class="col-m">${r.d ?? '—'}</td><td class="${r.p < 0 ? 'neg-ink' : ''}">${r.d ? rub(r.p / r.d) : '<span class="muted" title="Нет рабочих дней">—</span>'}</td><td>${spark(r.s)}</td></tr>`).join('')}</tbody></table>`;
     $('#top5').innerHTML = tbl(rows.slice(0, 5));
@@ -731,7 +735,7 @@ PAGES.report = () => {
   const ym = STATE.ym, prev = prevYm(ym);
   topbar('Отчёт для руководителя', { month: true, extra: `<button class="btn primary" id="print">${ico('pdf', 15)}Печать / PDF</button><button class="btn hide-m" id="xls">${ico('xls', 15)}Excel</button>` });
   const f = fleetDays(ym), P = fleetTotal(ym), PP = hasProfit(prev) ? fleetTotal(prev) : null;
-  const rows = carsWithProfit(ym).map(k => ({ k, p: allocation(ym).cars[k].alloc, raw: profitRaw(ym, k), d: (daysOf(ym, k) || {}).worked })).sort((a, b) => b.raw - a.raw);
+  const rows = carsWithProfit(ym).map(k => ({ k, p: allocation(ym).cars[k].alloc, raw: profitRaw(ym, k), d: workedOf(ym, k) })).sort((a, b) => b.raw - a.raw);
   const loss = rows.filter(r => r.raw < 0).length;
   const t = list => `<table><thead><tr><th>Машина</th><th>Прибыль</th><th>Раб. дн.</th><th>На раб. день</th></tr></thead><tbody>${list.map(r => `<tr><td><b>${name(r.k)}</b></td><td class="${r.raw < 0 ? 'neg-ink' : ''}">${rub(r.raw)}</td><td>${r.d ?? '—'}</td><td class="${r.raw < 0 ? 'neg-ink' : ''}">${r.d ? rub(r.raw / r.d) : '—'}</td></tr>`).join('')}</tbody></table>`;
   const kNow = ki(ym), kPrev = SCHED[prev] ? ki(prev) : null;
@@ -808,12 +812,12 @@ PAGES.input = () => {
     <div class="stack">
       <div class="card panel"><div class="panel-h"><div><h2>Как это работает</h2></div></div>
         <ol style="margin:0;padding-left:18px;color:var(--ink-2);line-height:1.7">
-          <li>Скачайте шаблон: в нём уже стоят все машины месяца.</li><li>Заполните жёлтые ячейки: пробег, доходы и расходы по статьям, ставку НДС.</li>
+          <li>Скачайте шаблон: в нём уже стоят все машины месяца.</li><li>Заполните жёлтые ячейки: пробег, отработанные дни, доходы и расходы по статьям, ставку НДС, внизу — общие расходы. Формулы в ячейках можно.</li>
           <li>Перетащите файл в окно слева. Программа покажет, что запишет, а ошибки подсветит красным с причиной.</li>
           <li>Нажмите «Применить». Исправили файл — загрузите снова: данные машин из файла заменятся, а не сложатся.</li></ol>
         <p class="muted" style="font-size:12.5px;margin:12px 0 0">Можно и без шаблона: нажмите на машину в списке и внесите данные вручную. Файл парка от диспетчера обновит график и заправки за открытые месяцы; закрытые месяцы не меняются.</p></div>
       <div class="card panel"><div class="panel-h"><div><h2>Проверки</h2></div></div>
-        <ul style="margin:0;padding-left:18px;color:var(--ink-2);line-height:1.7"><li>Пробег от ${int(S.kmMin)} до ${int(S.kmMax)} км в месяц</li><li>Суммы — числа, не отрицательные</li><li>Указана ставка НДС; при «без НДС» суммы не могут быть «с НДС»</li><li>Машина есть в справочнике, в файле не повторяется</li><li>Месяц открыт для ввода</li></ul><p class="muted" style="font-size:12.5px;margin:10px 0 0">Внести вручную: нажмите на машину в списке «Статус по машинам».</p></div>
+        <ul style="margin:0;padding-left:18px;color:var(--ink-2);line-height:1.7"><li>Пробег больше ${int(S.kmMax)} км — предупреждение, данные всё равно пишутся</li><li>Отработано дней — от 0 до числа дней в месяце</li><li>Суммы — числа или формулы, не отрицательные</li><li>Указана ставка НДС; при «без НДС» суммы не могут быть «с НДС»</li><li>Машина есть в справочнике, в файле не повторяется</li><li>Месяц открыт для ввода</li></ul><p class="muted" style="font-size:12.5px;margin:10px 0 0">Внести вручную: нажмите на машину в списке «Статус по машинам».</p></div>
     </div></div>${uploadsCard()}`;
   const drop = $('#drop');
   ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
@@ -900,7 +904,7 @@ function openEntry(ym, k) {
   const nd = daysIn(ym);
   const f = (id, label, val, extra = '') => `<label>${label}<input type="number" step="any" inputmode="decimal" id="in-${id}" value="${val ?? ''}" ${extra}><span class="err" id="in-${id}-e"></span></label>`;
   $('#modal').innerHTML = `<div class="card modal fade" role="dialog" aria-modal="true" aria-labelledby="mt" style="width:min(680px,100%)"><h2 id="mt">${name(k)} · ${ymLabel(ym).toLowerCase()}</h2><p class="muted" style="margin:0">${esc((V[k] || {}).plate || '')} · суммы в рублях${x.source === 'template' ? ' · сейчас данные из шаблона — сохранение заменит их' : ''}</p>
-    <div class="form">${f('km', 'Пробег, км', x.km, 'min="0" inputmode="numeric"')}${f('days', 'Рабочих дней (если машины нет в графике)', x.days, `min="0" max="${nd}" inputmode="numeric"`)}
+    <div class="form">${f('km', 'Пробег, км', x.km, 'min="0" inputmode="numeric"')}${f('days', 'Отработано дней', x.days, `min="0" max="${nd}" inputmode="numeric"`)}
       <label>Ставка НДС<select class="inp" id="in-vat">${['22%', '10%', '7%', '5%', '0%', 'без НДС'].map(v => `<option ${(x.vat || '22%') === v ? 'selected' : ''}>${v}</option>`).join('')}</select><span class="err" id="in-vat-e"></span></label>
       <label style="display:flex;gap:8px;align-items:center;flex-direction:row;margin-top:22px"><input type="checkbox" id="in-gross" ${x.gross !== false ? 'checked' : ''}> Суммы указаны с НДС</label>
       <div class="full upl-sub">Доходы</div>${ARTICLES.filter(([c]) => INCOME.includes(c)).map(([c, t]) => f(c, t, a[c])).join('')}
@@ -1070,7 +1074,7 @@ PAGES.settings = () => {
   topbar('Настройки');
   $('#content').innerHTML = `<div class="g2">
     <div class="card panel"><div class="panel-h"><div><h2>Распределение общих расходов</h2><p>общехоз, сервис, трактор и амортизация без привязки к машине</p></div></div>
-      <div style="display:grid;gap:8px">${[['days', 'По рабочим дням', 'по умолчанию'], ['equal', 'Поровну', ''], ['km', 'По пробегу', 'станет доступно, когда будет вноситься пробег']].map(([v, t, h]) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--border);border-radius:10px;${v === 'km' ? 'opacity:.5' : ''}"><input type="radio" name="alloc" value="${v}" ${S.alloc === v ? 'checked' : ''} ${v === 'km' ? 'disabled' : ''}><span><b>${t}</b><br><span class="muted" style="font-size:12.5px">${h}</span></span></label>`).join('')}</div></div>
+      <div style="display:grid;gap:8px">${[['days', 'По рабочим дням', 'по умолчанию'], ['equal', 'Поровну', ''], ['km', 'По пробегу', 'по пробегу из шаблона; если пробега за месяц нет — поровну']].map(([v, t, h]) => `<label style="display:flex;gap:10px;align-items:flex-start;padding:10px;border:1px solid var(--border);border-radius:10px;"><input type="radio" name="alloc" value="${v}" ${S.alloc === v ? 'checked' : ''} ><span><b>${t}</b><br><span class="muted" style="font-size:12.5px">${h}</span></span></label>`).join('')}</div></div>
     <div class="card panel"><div class="panel-h"><div><h2>Группы по году выпуска</h2><p>верхние границы трёх первых групп</p></div></div>
       <div class="form" style="grid-template-columns:repeat(3,1fr);margin-top:0">${S.groups.map((g, i) => `<label>Граница ${i + 1}<input type="number" data-g="${i}" value="${g}" min="2000" max="2030"></label>`).join('')}</div></div>
     <div class="card panel"><div class="panel-h"><div><h2>Топливо</h2></div></div>

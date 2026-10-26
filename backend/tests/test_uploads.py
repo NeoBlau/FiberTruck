@@ -41,7 +41,7 @@ def test_template_lists_month_cars_and_round_trips():
     wb = openpyxl.load_workbook(io.BytesIO(u.get('/api/template/2026-10').content))
     ws = wb.active
     assert ws.title == 'Октябрь 2026' and ws['A3'].value == '885' and ws['B3'].value == 'Т885ВХ58'
-    data = filled_template(u, C3=11200, D3='1 100 000,50', F3=300000, R3='22%', S3='да')
+    data = filled_template(u, C3=11200, D3='1 100 000,50', F3=300000, R3=20, S3='22%', T3='да')
     r = upload(u, data)
     assert r.status_code == 200, r.text
     p = r.json()
@@ -52,19 +52,68 @@ def test_template_lists_month_cars_and_round_trips():
     with SessionLocal() as db:
         rev = db.scalar(select(Operation).where(Operation.article == 'revenue', Operation.source == 'template'))
         assert (rev.amount_gross_kop, rev.amount_net_kop, rev.vat_kop) == (110000050, 90163975, 19836075)  # 1 100 000,50 ₽ с НДС 22 %
-    assert count(Mileage, km=11200) == 1
+    assert count(Mileage, km=11200, worked_days=20) == 1
     e = u.get('/api/bootstrap').json()['input']['2026-10']['885']
     assert e['km'] == 11200 and e['amounts']['revenue'] == 1100000.5 and e['source'] == 'template'
 
 
 def test_template_errors_are_shown_and_not_applied():
     u = login('input')
-    data = filled_template(u, C3=99999, D3='сто', F3=-1)
+    data = filled_template(u, C3='много', D3='сто', F3=-1, R3=40)
     p = upload(u, data).json()
     row = p['sections'][0]['rows'][0]
     assert row['status'] == 'error'
-    assert 'пробег' in row['note'] and 'не число' in row['note'] and 'отрицательная' in row['note']
+    assert 'пробег' in row['note'] and 'не число' in row['note'] and 'отрицательная' in row['note'] and 'дней' in row['note']
     assert not p['can_apply']
+
+
+def own_template(formulas_cached=True) -> bytes:
+    """Шаблон, собранный бухгалтером: без служебного листа, с формулами, общие расходы в столбцах статей."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Октябрь 2026'
+    ws['A1'] = 'FiberTrack · шаблон ввода · Октябрь 2026 · заполните жёлтые ячейки, суммы в рублях'
+    head = ['Машина', 'Госномер', 'Пробег, км', 'Выручка от перевозок', 'Прочий доход', 'Топливо', 'Ремонт и запчасти', 'ТО', 'Шины',
+            'Зарплата водителей', 'Суточные', 'Платные дороги и «Платон»', 'Страхование', 'Лизинг / кредит', 'Мойка', 'Штрафы', 'Прочее',
+            'Отработано дней', 'Ставка НДС', 'Суммы с НДС (да/нет)', 'Документ']
+    for c, h in enumerate(head, 1):
+        ws.cell(2, c, h)
+    ws.append(['885', 'Т885ВХ58', 31000, 1155000, None, 306000, '=31624.95-27000+174700', None, None, 204026.23, 27000,
+               '=12084.2+17520.45', None, 0, 0, '=3442.62+O3', None, 19, '22%', 'да'])
+    ws.append([])
+    ws.append(['Общие расходы (без машины)'])
+    ws.append(['Общехоз', None, '=1308677.79-143861', *[None] * 15, '22%', 'да'])
+    ws.append(['Сервис', None, 143861, *[None] * 15, '22%', 'да'])
+    ws.append(['Трактор', None, 0, 0.01, None, 7815, 0, None, None, 67180, *[None] * 8, '22%', 'да'])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_own_template_with_formulas_and_shared_block():
+    u = login('input')
+    p = upload(u, own_template()).json()        # openpyxl не сохраняет результат формул — программа досчитывает сама
+    cars, shared = p['sections'][0]['rows'], p['sections'][1]['rows']
+    assert cars[0]['status'] == 'warn' and 'пробег' in cars[0]['note']        # больше обычного — предупреждение, но пишется
+    assert [r['status'] for r in shared] == ['ok', 'ok', 'ok'] and p['can_apply'], shared
+    assert u.post(f"/api/uploads/{p['id']}/apply").status_code == 200
+    with SessionLocal() as db:
+        repair = db.scalar(select(Operation.amount_gross_kop).where(Operation.article == 'repair'))
+        fines = db.scalar(select(Operation.amount_gross_kop).where(Operation.article == 'fines'))
+        shared_kop = dict(db.execute(select(Operation.article, Operation.amount_gross_kop).where(Operation.vehicle_id.is_(None))).all())
+    assert repair == 17932495 and fines == 344262                               # 31624,95 − 27000 + 174700; 3442,62 + 0
+    assert shared_kop == {'shared_gen': 116481679, 'shared_service': 14386100, 'shared_tractor': 7499499}   # трактор: расходы − доход
+    assert count(Mileage, km=31000, worked_days=19) == 1
+    a = login('admin').get('/api/bootstrap').json()
+    assert a['wdays']['2026-10']['885'] == 19 and a['fin']['2026-10']['shared']['g']['shared_tractor'] == 74994.99
+
+
+def test_formula_evaluator():
+    from app.uploads import formula_value
+    ws = openpyxl.Workbook().active
+    ws['A1'], ws['A2'] = 10, '=A1*2'
+    assert formula_value('=(A1+5)/3-A2', ws) == -15
+    assert formula_value('=SUM(A1:A2)', ws) is None and formula_value('=9**9**9', ws) is None
 
 
 def test_template_for_closed_month_writes_nothing():

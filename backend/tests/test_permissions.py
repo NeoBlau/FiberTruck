@@ -57,7 +57,7 @@ def test_route_permissions(route, allowed, role):
 def test_input_role_gets_no_aggregates():
     d = login('input').get('/api/bootstrap').json()
     assert d['profit'] == {} and d['shared'] == {} and d['fuel_month'] == {} and d['idle_hist'] == {} and d['bench'] == {}
-    assert d['textdic'] == [] and d['fin'] == {} and d['km'] == {} and d['profit_months'] == []
+    assert d['textdic'] == [] and d['fin'] == {} and d['km'] == {} and d['wdays'] == {} and d['profit_months'] == []
     # от графика — только состав машин, без статусов по дням и итогов
     assert all(set(r) == {'k'} for m in d['schedule'] for r in m['rows'])
     raw = json.dumps(d, ensure_ascii=False)

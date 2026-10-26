@@ -19,7 +19,7 @@ def bootstrap(user: User = Depends(current_user), db: Session = Depends(get_db))
 def put_settings(data: dict, user: User = Depends(require_roles('admin')), db: Session = Depends(get_db)):
     cur = ui_settings(db)
     clean = {k: data[k] for k in DEFAULT_UI_SETTINGS if k in data}
-    if 'alloc' in clean and clean['alloc'] not in ('days', 'equal'):
+    if 'alloc' in clean and clean['alloc'] not in ('days', 'equal', 'km'):
         clean.pop('alloc')
     if 'groups' in clean:
         clean['groups'] = sorted(int(x) for x in clean['groups'])[:3]

@@ -1,7 +1,7 @@
 """Загрузка файлов: распознать → предпросмотр → «Применить» → при необходимости откат.
 
 Поддерживаются:
-  • шаблон FiberTrack (его выдаёт сама программа) — пробег, выручка и расходы по машинам, общие расходы;
+  • шаблон FiberTrack — пробег, отработанные дни, выручка и расходы по машинам, общие расходы (формулы в ячейках можно);
   • таблица прибыли по машинам (формат заказчика) — только владелец;
   • файл парка: график работы, «Анализ ЗАПРАВОК», «АВТО» (любой набор этих листов).
 
@@ -226,7 +226,47 @@ def detect(wb) -> str:
 
 
 # ================================================================ шаблон FiberTrack
+SHARED_HEAD = 'Общие расходы (без машины)'
+DAYS_TITLES = ('Отработано дней', 'Рабочих дней', 'Дней в работе')
+_FORMULA_TOKEN = re.compile(r'\s*(?:(\d+(?:[.,]\d+)?)|(\$?[A-Z]{1,3}\$?\d+)|([-+*/()]))', re.I)
+
+
+def formula_value(text: str, ws, depth: int = 0):
+    """Простая формула без сохранённого результата (=12+5-C4, =(A1+3)*2) → число. Иначе None.
+    Excel сохраняет результат сам; это нужно для файлов из программ, которые его не пишут."""
+    if depth > 20 or not isinstance(text, str) or not text.startswith('='):
+        return None
+    toks, pos, s = [], 0, text[1:].strip()
+    while pos < len(s):
+        m = _FORMULA_TOKEN.match(s, pos)
+        if not m or m.end() == pos:
+            return None
+        num, ref, op = m.groups()
+        if num:
+            toks.append(num.replace(',', '.'))
+        elif ref:
+            v = ws[ref.replace('$', '')].value
+            if isinstance(v, str) and v.startswith('='):
+                v = formula_value(v, ws, depth + 1)
+            if v is None or v == '':
+                v = 0
+            if not isinstance(v, (int, float, Decimal)) or isinstance(v, bool):
+                return None
+            toks.append(f'({v})')
+        else:
+            toks.append(op)
+        pos = m.end()
+    expr = ''.join(toks)
+    if '**' in expr or '//' in expr:
+        return None
+    try:
+        return float(eval(expr, {'__builtins__': {}}, {}))   # только числа, скобки и + - * /
+    except Exception:
+        return None
+
+
 def build_template(db: Session, ym: str, keys: list[str]) -> openpyxl.Workbook:
+    """Шаблон месяца: машины строками, статьи столбцами; ниже — общие расходы в тех же столбцах."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.worksheet.datavalidation import DataValidation
     wb = openpyxl.Workbook()
@@ -235,14 +275,29 @@ def build_template(db: Session, ym: str, keys: list[str]) -> openpyxl.Workbook:
     navy, yellow = PatternFill('solid', fgColor='0B1F3A'), PatternFill('solid', fgColor='FFF3CC')
     thin = Side(style='thin', color='D6D9DF')
     box = Border(left=thin, right=thin, top=thin, bottom=thin)
-    head = ['Машина', 'Госномер'] + [t for _, t in TEMPLATE_COLUMNS] + ['Ставка НДС', 'Суммы с НДС (да/нет)', 'Документ']
+    n = len(TEMPLATE_COLUMNS)
+    c_days, c_vat, c_gross, c_doc = 3 + n, 4 + n, 5 + n, 6 + n
+    head = ['Машина', 'Госномер'] + [t for _, t in TEMPLATE_COLUMNS] + [DAYS_TITLES[0], 'Ставка НДС', 'Суммы с НДС (да/нет)', 'Документ']
     ws['A1'] = f'FiberTrack · шаблон ввода · {ym_label(ym)} · заполните жёлтые ячейки, суммы в рублях'
     ws['A1'].font = Font(bold=True, size=13)
-    for c, h in enumerate(head, 1):
-        cell = ws.cell(2, c, h)
-        cell.font, cell.fill = Font(bold=True, color='FFFFFF'), navy
-        cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
-    ws.row_dimensions[2].height = 34
+
+    def header(r, cells):
+        for c, h in enumerate(cells, 1):
+            cell = ws.cell(r, c, h)
+            cell.font, cell.fill = Font(bold=True, color='FFFFFF'), navy
+            cell.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        ws.row_dimensions[r].height = 34
+
+    def inputs(r, money_from):
+        for c in range(3, c_doc + 1):
+            cell = ws.cell(r, c)
+            cell.fill, cell.border = yellow, box
+            if c < c_days:
+                cell.number_format = '#,##0.00;[Red]-#,##0.00' if c >= money_from else '#,##0'
+        ws.cell(r, c_vat, '22%')
+        ws.cell(r, c_gross, 'да')
+
+    header(2, head)
     vehicles = {v.key: v for v in db.scalars(select(Vehicle).where(Vehicle.key.in_(keys)))}
     order = sorted(keys, key=lambda k: (int(re.match(r'\d+', k).group()), k))
     r = 3
@@ -250,40 +305,33 @@ def build_template(db: Session, ym: str, keys: list[str]) -> openpyxl.Workbook:
         v = vehicles[k]
         ws.cell(r, 1, v.name).font = Font(bold=True)
         ws.cell(r, 2, v.plate or '')
-        for c in range(3, 3 + len(TEMPLATE_COLUMNS)):
-            cell = ws.cell(r, c)
-            cell.fill, cell.border, cell.number_format = yellow, box, '#,##0.00;[Red]-#,##0.00' if c > 3 else '#,##0'
-        ws.cell(r, 3 + len(TEMPLATE_COLUMNS), '22%').fill = yellow
-        ws.cell(r, 4 + len(TEMPLATE_COLUMNS), 'да').fill = yellow
-        ws.cell(r, 5 + len(TEMPLATE_COLUMNS)).fill = yellow
+        inputs(r, 4)
         r += 1
     last_car = r - 1
     r += 1
-    for c, h in enumerate(['Общие расходы', 'Сумма', 'Ставка НДС', 'Суммы с НДС (да/нет)', 'Документ'], 1):
-        cell = ws.cell(r, c, h)
-        cell.font, cell.fill = Font(bold=True, color='FFFFFF'), navy
+    header(r, [SHARED_HEAD, '', 'Сумма'] + [t for _, t in TEMPLATE_COLUMNS[1:]] + ['', 'Ставка НДС', 'Суммы с НДС (да/нет)', 'Документ'])
     for name in ('Общехоз', 'Сервис', 'Трактор'):
         r += 1
         ws.cell(r, 1, name).font = Font(bold=True)
-        ws.cell(r, 2).fill, ws.cell(r, 2).border, ws.cell(r, 2).number_format = yellow, box, '#,##0.00;[Red]-#,##0.00'
-        ws.cell(r, 3, '22%').fill = yellow
-        ws.cell(r, 4, 'да').fill = yellow
-        ws.cell(r, 5).fill = yellow
-    vat_col = openpyxl.utils.get_column_letter(3 + len(TEMPLATE_COLUMNS))
-    gross_col = openpyxl.utils.get_column_letter(4 + len(TEMPLATE_COLUMNS))
+        inputs(r, 3)
+        ws.cell(r, c_days).fill = PatternFill(None)
+    note = r + 2
+    ws.cell(note, 1, 'Общие расходы: сумму пишите в «Сумма» или по статьям — программа сложит; доход (например, трактора) вычтет.').font = Font(italic=True, color='5B6472')
+    L = openpyxl.utils.get_column_letter
     dv_vat = DataValidation(type='list', formula1='"' + ','.join(VAT_RATES) + '"', allow_blank=False, showErrorMessage=True,
                             errorTitle='Ставка НДС', error='Выберите ставку из списка')
     dv_yes = DataValidation(type='list', formula1='"да,нет"', allow_blank=False)
-    ws.add_data_validation(dv_vat)
-    ws.add_data_validation(dv_yes)
+    dv_days = DataValidation(type='whole', operator='between', formula1='0', formula2=str(days_in(ym)), allow_blank=True,
+                             showErrorMessage=True, errorTitle='Отработано дней', error=f'Целое число от 0 до {days_in(ym)}')
+    for dv in (dv_vat, dv_yes, dv_days):
+        ws.add_data_validation(dv)
     if last_car >= 3:
-        dv_vat.add(f'{vat_col}3:{vat_col}{last_car}')
-        dv_yes.add(f'{gross_col}3:{gross_col}{last_car}')
-    dv_vat.add(f'C{last_car + 3}:C{r}')
-    dv_yes.add(f'D{last_car + 3}:D{r}')
-    widths = [12, 13] + [14] * len(TEMPLATE_COLUMNS) + [12, 12, 18]
+        dv_days.add(f'{L(c_days)}3:{L(c_days)}{last_car}')
+    dv_vat.add(f'{L(c_vat)}3:{L(c_vat)}{r}')
+    dv_yes.add(f'{L(c_gross)}3:{L(c_gross)}{r}')
+    widths = [14, 13] + [14] * n + [11, 12, 12, 18]
     for i, w in enumerate(widths, 1):
-        ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        ws.column_dimensions[L(i)].width = w
     ws.freeze_panes = 'C3'
     meta = wb.create_sheet('_ft')
     meta['A1'], meta['A2'] = TEMPLATE_MARK, ym
@@ -291,7 +339,29 @@ def build_template(db: Session, ym: str, keys: list[str]) -> openpyxl.Workbook:
     return wb
 
 
-def plan_template(ctx: Ctx, wb, chosen_ym: str | None) -> dict:
+def _template_grid(wb, fwb):
+    """Значения листа шаблона; формулы без сохранённого результата досчитываем сами."""
+    ws = wb.worksheets[0]
+    g = parsing.grid(ws)
+    if fwb is None:
+        return g, []
+    fws = fwb.worksheets[0]
+    bad = []
+    for i, r in enumerate(g):
+        for j, v in enumerate(r):
+            if v is None:
+                f = fws.cell(i + 1, j + 1).value
+                if isinstance(f, str) and f.startswith('='):
+                    x = formula_value(f, fws)
+                    if x is None:
+                        bad.append(f'{openpyxl.utils.get_column_letter(j + 1)}{i + 1}')
+                        r[j] = f          # покажем как ошибку «не число»
+                    else:
+                        r[j] = x
+    return g, bad
+
+
+def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
     ws = wb.worksheets[0]
     ym = None
     if '_ft' in wb.sheetnames:
@@ -299,7 +369,7 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None) -> dict:
     ym = ym or label_to_ym(ws['A1'].value) or label_to_ym(ws.title) or chosen_ym
     if not ym:
         raise UploadError('В шаблоне не указан месяц. Скачайте шаблон заново кнопкой «Скачать шаблон на месяц».')
-    g = parsing.grid(ws)
+    g, bad_formulas = _template_grid(wb, fwb)
     hdr_i = next((i for i, r in enumerate(g) if str(r[0] or '').strip() == 'Машина'), None)
     if hdr_i is None:
         raise UploadError('В шаблоне не найдена строка заголовков («Машина», «Госномер», …). Скачайте шаблон заново.')
@@ -308,69 +378,87 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None) -> dict:
     for code, title in TEMPLATE_COLUMNS:
         if title in hdr:
             col[code] = hdr.index(title)
-    for code, title in (('vat', 'Ставка НДС'), ('gross', 'Суммы с НДС (да/нет)'), ('doc', 'Документ')):
-        if title in hdr:
-            col[code] = hdr.index(title)
+    for code, titles in (('days', DAYS_TITLES), ('vat', ('Ставка НДС',)), ('gross', ('Суммы с НДС (да/нет)', 'Суммы с НДС')), ('doc', ('Документ',))):
+        for t in titles:
+            if t in hdr:
+                col[code] = hdr.index(t)
+                break
     missing = [t for c, t in TEMPLATE_COLUMNS if c not in col]
     if missing:
         raise UploadError('В шаблоне не хватает столбцов: ' + ', '.join(missing) + '. Скачайте шаблон заново.')
+    cell = lambda r, c: r[col[c]] if c in col and col[c] < len(r) else None
     s = ctx.settings
     month_open = ctx.is_open(ym)
+    max_days = days_in(ym)
     rows, cars, shared = [], [], []
     seen = set()
-    i = hdr_i + 1
-    while i < len(g) and str(g[i][0] or '').strip() != 'Общие расходы':
-        r = g[i]
-        i += 1
-        name = r[0]
-        if name is None or not str(name).strip():
-            continue
-        vals = {c: r[col[c]] for c in col}
-        filled = any(vals[c] not in (None, '') for c, _ in TEMPLATE_COLUMNS)
-        v = ctx.find_vehicle(name) or ctx.find_vehicle(r[1])
-        cells = {'car': str(name).strip(), 'plate': str(r[1] or '')}
-        if not filled:
-            rows.append(row([cells['car'], cells['plate'], '', '', '', ''], 'skip', 'пусто — не меняется'))
-            continue
-        errs = []
-        if v is None:
-            errs.append('машина не найдена в справочнике')
-        elif v.key in seen:
-            errs.append('машина повторяется в шаблоне')
+
+    def vat_gross(r, errs, has_money):
         try:
-            km = int_value(vals['km'])
+            vat = vat_value(cell(r, 'vat'))
         except ValueError:
-            km, _ = None, errs.append('пробег — не целое число')
-        if km is not None and not (s['kmMin'] <= km <= s['kmMax']):
-            errs.append(f"пробег вне пределов {int(s['kmMin'])}–{int(s['kmMax'])} км")
-        amounts = {}
-        for a in MONEY_ARTICLES:
+            vat, _ = None, errs.append('непонятная ставка НДС')
+        try:
+            gross = yes_no(cell(r, 'gross'))
+        except ValueError:
+            gross, _ = None, errs.append('«Суммы с НДС» — укажите да или нет')
+        if has_money and vat is None and not any('НДС' in e for e in errs):
+            errs.append('не указана ставка НДС')
+        gross = True if gross is None else gross
+        if vat == 'без НДС' and gross and has_money:
+            errs.append('ставка «без НДС», а суммы отмечены «с НДС»')
+        return vat, gross
+
+    def money(r, codes, errs):
+        out = {}
+        for a in codes:
             try:
-                k = money_kop(vals[a])
+                k = money_kop(cell(r, a))
             except ValueError:
                 errs.append(f'«{dict(TEMPLATE_COLUMNS)[a]}» — не число')
                 continue
             if k is not None:
                 if k < 0:
                     errs.append(f'«{dict(TEMPLATE_COLUMNS)[a]}» отрицательная')
-                amounts[a] = k
+                out[a] = k
+        return out
+
+    i = hdr_i + 1
+    while i < len(g) and not str(g[i][0] or '').strip().startswith('Общие расходы'):
+        r = g[i]
+        i += 1
+        name = r[0]
+        if name is None or not str(name).strip():
+            continue
+        filled = any(cell(r, c) not in (None, '') for c in [*dict(TEMPLATE_COLUMNS), 'days'])
+        v = ctx.find_vehicle(name) or ctx.find_vehicle(r[1])
+        cells = {'car': str(name).strip(), 'plate': str(r[1] or '')}
+        if not filled:
+            rows.append(row([cells['car'], cells['plate'], '', '', '', '', ''], 'skip', 'пусто — не меняется'))
+            continue
+        errs, warns = [], []
+        if v is None:
+            errs.append('машина не найдена в справочнике')
+        elif v.key in seen:
+            errs.append('машина повторяется в шаблоне')
         try:
-            vat = vat_value(vals.get('vat'))
+            km = int_value(cell(r, 'km'))
         except ValueError:
-            vat, _ = None, errs.append('непонятная ставка НДС')
+            km, _ = None, errs.append('пробег — не целое число')
+        if km is not None and not (s['kmMin'] <= km <= s['kmMax']):
+            warns.append(f"пробег больше обычного ({int(s['kmMin'])}–{int(s['kmMax'])} км) — проверьте")
         try:
-            gross = yes_no(vals.get('gross'))
+            days = int_value(cell(r, 'days'))
         except ValueError:
-            gross, _ = None, errs.append('«Суммы с НДС» — укажите да или нет')
-        if amounts and vat is None and not any('НДС' in e for e in errs):
-            errs.append('не указана ставка НДС')
-        gross = True if gross is None else gross
-        if vat == 'без НДС' and gross and any(amounts.values()):
-            errs.append('ставка «без НДС», а суммы отмечены «с НДС»')
+            days, _ = None, errs.append('дни — не целое число')
+        if days is not None and not 0 <= days <= max_days:
+            errs.append(f'дней должно быть от 0 до {max_days}')
+        amounts = money(r, MONEY_ARTICLES, errs)
+        vat, gross = vat_gross(r, errs, bool(amounts))
         income = sum(amounts.get(a, 0) for a in INCOME_ARTICLES)
         expense = sum(k for a, k in amounts.items() if a not in INCOME_ARTICLES)
-        disp = [v.name if v else cells['car'], (v.plate if v else cells['plate']) or '', '' if km is None else f'{km:,}'.replace(',', ' '),
-                rub(income) if income else '', rub(expense) if expense else '', vat or '']
+        disp = [v.name if v else cells['car'], (v.plate if v else cells['plate']) or '', '' if km is None else f'{km:,}'.replace(',', ' '),
+                '' if days is None else str(days), rub(income) if income else '', rub(expense) if expense else '', vat or '']
         if errs:
             rows.append(row(disp, 'error', '; '.join(errs)))
             continue
@@ -378,11 +466,13 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None) -> dict:
             rows.append(row(disp, 'skip', 'месяц закрыт'))
             continue
         seen.add(v.key)
-        cars.append({'vehicle_id': v.id, 'key': v.key, 'km': km, 'amounts': amounts, 'vat': vat or '22%', 'gross': gross,
-                     'doc': str(vals.get('doc') or '').strip()[:128] or None})
-        rows.append(row(disp, 'ok', 'будет записано'))
-    # общие расходы
+        cars.append({'vehicle_id': v.id, 'key': v.key, 'km': km, 'days': days, 'amounts': amounts, 'vat': vat or '22%', 'gross': gross,
+                     'doc': str(cell(r, 'doc') or '').strip()[:128] or None})
+        rows.append(row(disp, 'warn' if warns else 'ok', '; '.join(warns) or 'будет записано'))
+
+    # общие расходы: «Общехоз», «Сервис», «Трактор»
     shared_rows = []
+    old_format = i < len(g) and str(g[i][1] or '').strip() == 'Сумма'      # шаблон прошлой версии: сумма в столбце B
     while i < len(g):
         r = g[i]
         i += 1
@@ -391,41 +481,64 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None) -> dict:
         if not art:
             continue
         errs = []
-        try:
-            k = money_kop(r[1])
-        except ValueError:
-            k, _ = None, errs.append('сумма — не число')
+        if old_format:
+            try:
+                k = money_kop(r[1])
+            except ValueError:
+                k, _ = None, errs.append('сумма — не число')
+            vat, gross = None, True
+            try:
+                vat = vat_value(r[2])
+            except ValueError:
+                errs.append('непонятная ставка НДС')
+            try:
+                g_ = yes_no(r[3])
+                gross = True if g_ is None else g_
+            except ValueError:
+                errs.append('«Суммы с НДС» — укажите да или нет')
+            if k is not None and vat is None and not errs:
+                errs.append('не указана ставка НДС')
+            doc = r[4] if len(r) > 4 else None
+            detail = ''
+        else:
+            # «Сумма» стоит в столбце пробега; статьи — в своих столбцах; доходы вычитаются
+            try:
+                base = money_kop(cell(r, 'km'))
+            except ValueError:
+                base, _ = None, errs.append('«Сумма» — не число')
+            amounts = money(r, MONEY_ARTICLES, errs)
+            if base is not None and base < 0:
+                errs.append('«Сумма» отрицательная')
+            parts = [x for x in [base, *amounts.values()] if x is not None]
+            k = None if not parts else (base or 0) + sum(v for a, v in amounts.items() if a not in INCOME_ARTICLES) \
+                - sum(amounts.get(a, 0) for a in INCOME_ARTICLES)
+            vat, gross = vat_gross(r, errs, bool(parts))
+            doc = cell(r, 'doc')
+            inc = sum(amounts.get(a, 0) for a in INCOME_ARTICLES)
+            exp_ = sum(v for a, v in amounts.items() if a not in INCOME_ARTICLES)
+            bits = ([f'сумма {rub(base)}'] if base else []) + ([f'статьи {rub(exp_)}'] if exp_ else []) + ([f'минус доход {inc / 100:,.2f} ₽'.replace(',', ' ').replace('.', ',')] if inc else [])
+            detail = ', '.join(bits) if len(bits) > 1 or not base else ''
         if k is None and not errs:
             shared_rows.append(row([name, '', '', ''], 'skip', 'пусто — не меняется'))
             continue
-        try:
-            vat = vat_value(r[2]) or None
-        except ValueError:
-            vat, _ = None, errs.append('непонятная ставка НДС')
-        try:
-            gross = yes_no(r[3])
-        except ValueError:
-            gross, _ = None, errs.append('«Суммы с НДС» — укажите да или нет')
-        gross = True if gross is None else gross
-        if vat is None and not errs:
-            errs.append('не указана ставка НДС')
-        if k is not None and k < 0:
-            errs.append('сумма отрицательная')
         disp = [name, rub(k) if k is not None else '', vat or '', 'да' if gross else 'нет']
         if errs:
             shared_rows.append(row(disp, 'error', '; '.join(errs)))
         elif not month_open:
             shared_rows.append(row(disp, 'skip', 'месяц закрыт'))
         else:
-            shared.append({'article': art, 'kop': k, 'vat': vat, 'gross': gross, 'doc': str(r[4] or '').strip()[:128] or None})
-            shared_rows.append(row(disp, 'ok', 'будет записано'))
+            shared.append({'article': art, 'kop': k, 'vat': vat, 'gross': gross, 'doc': str(doc or '').strip()[:128] or None})
+            shared_rows.append(row(disp, 'ok', detail or 'будет записано'))
     notes = []
     if not month_open:
         notes.append(f'{ym_label(ym)} {"закрыт" if ctx.periods.get(ym) == "closed" else "не открыт"} для ввода — ничего не будет записано. '
                      'Попросите владельца открыть месяц.')
     if chosen_ym and chosen_ym != ym:
         notes.append(f'Шаблон за {ym_label(ym).lower()}, а на экране выбран {ym_label(chosen_ym).lower()}. Данные пойдут в {ym_label(ym).lower()} — как в шаблоне.')
-    sections = [section('cars', f'Машины · {ym_label(ym)}', ['Машина', 'Госномер', 'Пробег', 'Доходы', 'Расходы', 'НДС'], rows, notes,
+    if bad_formulas:
+        notes.append('Не смог посчитать формулы в ячейках ' + ', '.join(bad_formulas[:8]) + (' и др.' if len(bad_formulas) > 8 else '')
+                     + '. Откройте файл в Excel, сохраните и загрузите снова.')
+    sections = [section('cars', f'Машины · {ym_label(ym)}', ['Машина', 'Госномер', 'Пробег', 'Дней', 'Доходы', 'Расходы', 'НДС'], rows, notes,
                         plural(len(cars), 'машина', 'машины', 'машин') + ' к записи')]
     if shared_rows:
         sections.append(section('shared', 'Общие расходы', ['Статья', 'Сумма', 'НДС', 'С НДС'], shared_rows))
@@ -444,8 +557,8 @@ def apply_template(ctx: Ctx, up: Upload, user: User, plan: dict, backup: dict) -
         for o in old_ops + old_mil:
             db.delete(o)
         db.flush()
-        if c['km'] is not None:
-            db.add(Mileage(ym=ym, vehicle_id=vid, km=c['km'], source='template', upload_id=up.id, entered_by=user.id))
+        if c['km'] is not None or c.get('days') is not None:
+            db.add(Mileage(ym=ym, vehicle_id=vid, km=c['km'], worked_days=c.get('days'), source='template', upload_id=up.id, entered_by=user.id))
         rate = VAT_RATES[c['vat']]
         for a, k in c['amounts'].items():
             g, n, v = split_vat(k, rate, c['gross'])
@@ -751,13 +864,16 @@ KIND_NAMES = {'template': 'Шаблон FiberTrack', 'profit': 'Таблица �
 def make_preview(db: Session, path: str, chosen_ym: str | None, role: str) -> dict:
     try:
         wb = openpyxl.load_workbook(path, data_only=True)
+        fwb = openpyxl.load_workbook(path) if detect(wb) == 'template' else None
+    except UploadError:
+        raise
     except Exception:
         raise UploadError('Не получилось открыть файл как Excel (.xlsx). Если это старый .xls — откройте его в Excel и сохраните как .xlsx.')
     kind = detect(wb)
     if kind == 'profit' and role != 'admin':
         raise UploadError('Таблицу прибыли загружает владелец.')
     ctx = Ctx(db)
-    res = plan_template(ctx, wb, chosen_ym) if kind == 'template' else PLANNERS[kind](ctx, wb)
+    res = plan_template(ctx, wb, chosen_ym, fwb) if kind == 'template' else PLANNERS[kind](ctx, wb)
     res['kind_name'] = KIND_NAMES[kind]
     return res
 

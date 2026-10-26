@@ -15,7 +15,7 @@ from .models import (AuditLog, FleetDaysHistory, FuelDay, Mileage, Operation, Pe
                      ScheduleMonth, Setting, User, Vehicle)
 
 DEFAULT_UI_SETTINGS = {'alloc': 'days', 'groups': [2013, 2017, 2021], 'fuelPct': 10, 'glonassMax': 1500,
-                       'kmMin': 0, 'kmMax': 20000, 'lMin': 20, 'lMax': 45}
+                       'kmMin': 0, 'kmMax': 30000, 'lMin': 20, 'lMax': 45}
 ANALYTICS_ROLES = ('admin', 'viewer')
 SHARED = {'shared_tractor': 'tractor', 'shared_gen': 'gen', 'shared_service': 'service', 'shared_amort': 'amort'}
 
@@ -90,7 +90,7 @@ def build_payload(db: Session, user: User) -> dict:
                   for a in db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(300))][::-1],
         'input': input_entries(db, keys, list(periods) if analytics else open_yms),
         # аналитика — только владельцу и руководителю
-        'profit': {}, 'shared': {}, 'bench': {}, 'fuel_month': {}, 'idle_hist': {}, 'textdic': [], 'fin': {}, 'km': {}, 'profit_months': [],
+        'profit': {}, 'shared': {}, 'bench': {}, 'fuel_month': {}, 'idle_hist': {}, 'textdic': [], 'fin': {}, 'km': {}, 'wdays': {}, 'profit_months': [],
     }
 
     sched = defaultdict(list)
@@ -155,6 +155,11 @@ def build_payload(db: Session, user: User) -> dict:
     for m in km_rows:
         km[m.ym][keys[m.vehicle_id]] = m.km
     out['km'] = dict(km)
+    # отработанные дни из шаблона: по ним распределяются общие расходы месяца
+    wd: dict = defaultdict(dict)
+    for m in db.scalars(select(Mileage).where(Mileage.worked_days.is_not(None))):
+        wd[m.ym][keys[m.vehicle_id]] = m.worked_days
+    out['wdays'] = dict(wd)
 
     fm: dict = defaultdict(lambda: defaultdict(lambda: {'rn': 0.0, 'e100': 0.0, 'gl': 0.0, 'gl_days': 0, 'card_days': 0, 'anomaly': 0}))
     for f in db.scalars(select(FuelDay)):

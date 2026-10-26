@@ -19,7 +19,8 @@ say "1/3 Код"
 if [ -d .git ] && [ "${FT_NO_PULL:-}" != 1 ]; then
   git pull --ff-only || die "git pull не прошёл. Если меняли файлы проекта вручную — пришлите вывод git status."
 else
-  echo "  код не обновляю (папка не из git или FT_NO_PULL=1) — использую текущие файлы"
+  [ "${FT_NO_PULL:-}" = 1 ] || printf '\033[1;33m  Папка не из git — новая версия НЕ скачана. Распакуйте свежий архив fibertrack.zip поверх этой папки (.env не трогайте) и запустите скрипт снова.\033[0m\n'
+  echo "  использую текущие файлы"
 fi
 say "2/3 Пересборка и перезапуск (данные сохраняются)"
 if [ "${FT_NO_BUILD:-}" = 1 ]; then "${COMPOSE[@]}" up -d; else "${COMPOSE[@]}" up -d --build; fi
@@ -31,4 +32,5 @@ for i in $(seq 1 60); do
   sleep 2
 done
 echo "  версия базы: $("${COMPOSE[@]}" exec -T backend alembic current 2>/dev/null | tail -1)"
+[ -d .git ] && echo "  версия кода: $(git log -1 --format='%h от %cd' --date=format:'%d.%m.%Y %H:%M')"
 printf '\n\033[1;32mГотово — FiberTrack обновлён.\033[0m\n'

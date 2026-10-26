@@ -355,7 +355,7 @@ PAGES.dashboard = () => {
   const partial = f && f.basis === 'calc';
   const head = [];
   if (hasFin(ym) && !histMonth(ym)) head.push(`<div class="note">${ico('info')}<div>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} посчитана по введённым доходам и расходам${kmTotal(ym) ? ' и пробегу' : ''}: ${Object.keys(FIN[ym].cars).length} машин из ${monthCarCount(ym)}. ${carsWithProfit(ym).some(k => V[k] && V[k].amort) ? 'Амортизация — по справочнику машин.' : 'Амортизация в справочнике машин не заполнена — прибыль показана без неё. Впишите её в «Справочнике машин».'}</div></div>`);
-  else if (!hasProfit(ym)) head.push(`<div class="note">${ico('info')}<div><b>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} ещё не внесена.</b> Показаны только дни из графика${partial ? `, посчитанные по ячейкам${f.filled < daysIn(ym) ? ` (заполнено по ${f.filled}-е число)` : ''}: ручных итогов диспетчера за этот месяц нет` : ''}.</div></div>`);
+  else if (!hasProfit(ym)) head.push(`<div class="note">${ico('info')}<div><b>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} ещё не внесена.</b> ${f ? `Показаны только дни из графика${partial ? `, посчитанные по ячейкам${f.filled < daysIn(ym) ? ` (заполнено по ${f.filled}-е число)` : ''}: ручных итогов диспетчера за этот месяц нет` : ''}.` : ''}${LAST_PROFIT && LAST_PROFIT !== ym ? ` <button class="btn" data-goym="${LAST_PROFIT}" style="margin-top:8px">Показать ${MONTHS[Number(LAST_PROFIT.slice(5)) - 1]} ${LAST_PROFIT.slice(0, 4)}</button>` : ''}</div></div>`);
   else head.push(`<div class="note">${ico('info')}<div>Прибыль — из таблицы «Прибыль по машинам», дни — ${SCHED[ym] && SCHED[ym].manual ? 'ручные итоги диспетчера' : 'по ячейкам графика'}.${hasFin(ym) ? '' : ' Выручка, статьи расходов и пробег появятся после ввода бухгалтером.'}</div></div>`);
   const REV = revenueOf(ym), REVP = revenueOf(prev), KMT = kmTotal(ym), CPK = costPerKm(ym), CPKP = costPerKm(prev);
   const kp = [
@@ -908,7 +908,9 @@ function showUpload(u, scroll) {
   if ($('#upDiscard')) $('#upDiscard').onclick = async () => { try { await api(`/api/uploads/${u.id}/discard`, { method: 'POST' }); } catch (e) {} clear(); loadUploads(); };
   if ($('#upApply')) $('#upApply').onclick = async () => {
     $('#upApply').disabled = true; $('#upApply').textContent = 'Применяю…';
-    try { const r = await api(`/api/uploads/${u.id}/apply`, { method: 'POST' }); UI.LAST_UPLOAD = r; toast('Применено'); await refresh(); }
+    try { const r = await api(`/api/uploads/${u.id}/apply`, { method: 'POST' }); UI.LAST_UPLOAD = r; toast('Применено');
+      const ym = (r.months || []).filter(m => /^\d{4}-\d\d$/.test(m)).sort().pop(); if (ym) UI.STATE.ym = ym;   // дальше все вкладки показывают загруженный месяц
+      await refresh(); }
     catch (e) { $('#upApply').disabled = false; $('#upApply').textContent = 'Применить'; alert(e.message); }
   };
   if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1206,6 +1208,8 @@ addEventListener('hashchange', () => app && app.render());
 document.addEventListener('click', async e => {
   const r = e.target.closest('[data-resolve]');
   if (r) { r.disabled = true; try { await api(`/api/review/${r.dataset.resolve}/resolve`, { method: 'POST' }); await refresh(); } catch (x) { r.disabled = false; alert(x.message); } }
+  const g = e.target.closest('[data-goym]');
+  if (g && UI.STATE) { UI.STATE.ym = g.dataset.goym; app.render(); }
   if (e.target.closest('#logout')) { try { await api('/api/auth/logout', { method: 'POST' }); } catch (x) {} location.href = '/login'; }
 });
 try { const t = localStorage.getItem('ft-theme'); if (t) document.documentElement.dataset.theme = t; } catch (e) {}

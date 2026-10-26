@@ -89,7 +89,7 @@ const kmTotal = ym => Object.values(KM[ym] || {}).reduce((s, v) => s + (v || 0),
 const revenueOf = ym => hasFin(ym) ? Object.keys(FIN[ym].cars).reduce((s, k) => s + carIncome(ym, k), 0) : null;
 /* месяц считается по шаблону, когда в нём есть хотя бы половина машин: тогда он главнее таблицы прибыли */
 const finMonth = ym => hasFin(ym) && Object.keys(FIN[ym].cars).length * 2 >= monthCarCount(ym);
-const monthCarCount = ym => SCHED[ym] ? SCHED[ym].rows.length : Object.keys(D.profit).length;
+const monthCarCount = ym => SCHED[ym] ? SCHED[ym].rows.length : Object.keys(D.profit).length || Object.values(V).filter(v => v.active !== false && !v.history_only).length;
 const ART_NAMES = { revenue: 'Выручка от перевозок', other_income: 'Прочий доход', fuel: 'Топливо', repair: 'Ремонт и запчасти', maintenance: 'ТО', tires: 'Шины', salary: 'Зарплата водителей', per_diem: 'Суточные', tolls: 'Дороги и «Платон»', insurance: 'Страхование', leasing: 'Лизинг / кредит', wash: 'Мойка', fines: 'Штрафы', other: 'Прочее' };
 const REP_YEAR = () => ((UI.STATE && UI.STATE.ym) || D.generated).slice(0, 4);
 const SCHED = Object.fromEntries(D.schedule.map(m => [m.ym, m]));
@@ -121,7 +121,12 @@ function daysOf(ym, k) {
 function fleetDays(ym) {
   const m = SCHED[ym];
   const z = { worked: 0, no_driver: 0, idle: 0, planned: 0, unplanned: 0, cars: 0, cal: 0, basis: 'manual' };
-  if (!m) return null;
+  if (!m) {
+    /* графика нет — считаем по «Отработано дней» из шаблона: остальные дни машины не в работе */
+    const wd = (D.wdays || {})[ym]; if (!wd || !Object.keys(wd).length) return null;
+    const n = Object.keys(wd).length, worked = Object.values(wd).reduce((a, b) => a + b, 0);
+    return { ...z, worked, off: n * daysIn(ym) - worked, cars: n, cal: n * daysIn(ym), filled: daysIn(ym), basis: 'template' };
+  }
   const fd = m.manual ? daysIn(ym) : filledDays(ym);
   for (const r of m.rows) {
     const d = daysOf(ym, r.k); z.cars++; z.cal += fd;
@@ -298,8 +303,8 @@ function waterfall(el, ym, narrowForce) {
 }
 function daysBlock(f) {
   if (!f) return '';
-  const total = f.worked + f.no_driver + f.idle + f.planned + f.unplanned;
-  const items = [['Рейс', f.worked, '--st-T'], ['Нет водителя', f.no_driver, '--st-D'], ['Нет заявки / простой', f.idle, '--st-I'], ['ТО (план)', f.planned, '--st-W'], ['Ремонт (неплан)', f.unplanned, '--st-R']];
+  const total = f.worked + f.no_driver + f.idle + f.planned + f.unplanned + (f.off || 0);
+  const items = f.basis === 'template' ? [['В работе', f.worked, '--st-T'], ['Не в работе', f.off, '--st-O']] : [['Рейс', f.worked, '--st-T'], ['Нет водителя', f.no_driver, '--st-D'], ['Нет заявки / простой', f.idle, '--st-I'], ['ТО (план)', f.planned, '--st-W'], ['Ремонт (неплан)', f.unplanned, '--st-R']];
   return `<div class="daysbar">${items.filter(i => i[1]).map(([n, v, c]) => `<span title="${n}: ${v} дн. (${pct(v/total*100)})" style="flex:${v};background:var(${c})"></span>`).join('')}</div>
     <div class="legend">${items.map(([n, v, c]) => `<span><i style="background:var(${c})"></i>${n}<b>${v}</b></span>`).join('')}</div>`;
 }
@@ -343,13 +348,13 @@ PAGES.dashboard = () => {
   const ym = STATE.ym, prev = prevYm(ym);
   topbar('Дашборд месяца', { month: true, money: true, extra: `<a class="btn hide-m" href="#/report">${ico('pdf', 15)}PDF</a><button class="btn hide-m" id="xls">${ico('xls', 15)}Excel</button>` });
   const f = fleetDays(ym), fp = fleetDays(prev);
-  const kNow = ki(ym), kPrev = SCHED[prev] ? ki(prev) : null;
+  const kNow = ki(ym), kPrev = ki(prev);
   const P = fleetProfit(ym), PP = fleetProfit(prev);
   const loss = hasProfit(ym) ? carsWithProfit(ym).filter(k => carProfit(ym, k) < 0).length : null;
   const lossP = hasProfit(prev) ? carsWithProfit(prev).filter(k => carProfit(prev, k) < 0).length : null;
   const partial = f && f.basis === 'calc';
   const head = [];
-  if (hasFin(ym) && !histMonth(ym)) head.push(`<div class="note">${ico('info')}<div>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} посчитана по введённым доходам и расходам${kmTotal(ym) ? ' и пробегу' : ''}: ${Object.keys(FIN[ym].cars).length} машин из ${monthCarCount(ym)}. Амортизация — по справочнику машин.</div></div>`);
+  if (hasFin(ym) && !histMonth(ym)) head.push(`<div class="note">${ico('info')}<div>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} посчитана по введённым доходам и расходам${kmTotal(ym) ? ' и пробегу' : ''}: ${Object.keys(FIN[ym].cars).length} машин из ${monthCarCount(ym)}. ${carsWithProfit(ym).some(k => V[k] && V[k].amort) ? 'Амортизация — по справочнику машин.' : 'Амортизация в справочнике машин не заполнена — прибыль показана без неё. Впишите её в «Справочнике машин».'}</div></div>`);
   else if (!hasProfit(ym)) head.push(`<div class="note">${ico('info')}<div><b>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} ещё не внесена.</b> Показаны только дни из графика${partial ? `, посчитанные по ячейкам${f.filled < daysIn(ym) ? ` (заполнено по ${f.filled}-е число)` : ''}: ручных итогов диспетчера за этот месяц нет` : ''}.</div></div>`);
   else head.push(`<div class="note">${ico('info')}<div>Прибыль — из таблицы «Прибыль по машинам», дни — ${SCHED[ym] && SCHED[ym].manual ? 'ручные итоги диспетчера' : 'по ячейкам графика'}.${hasFin(ym) ? '' : ' Выручка, статьи расходов и пробег появятся после ввода бухгалтером.'}</div></div>`);
   const REV = revenueOf(ym), REVP = revenueOf(prev), KMT = kmTotal(ym), CPK = costPerKm(ym), CPKP = costPerKm(prev);
@@ -379,7 +384,7 @@ PAGES.dashboard = () => {
     <section class="g21" style="margin-top:14px">
       <div class="card panel"><div class="panel-h"><div><h2>${hasFin(ym) && !histMonth(ym) ? 'От выручки к прибыли' : 'От прибыли машин к прибыли парка'}</h2><p>${ymLabel(ym)} · ${hasFin(ym) && !histMonth(ym) ? 'расходы по статьям, общие и амортизация' : 'общие расходы и амортизация'}</p></div></div>
         ${hasProfit(ym) ? '<div id="wf" class="chart" role="img" aria-label="Водопад прибыли"></div>' : empty('Нет данных о прибыли', 'Водопад появится, когда за месяц будет внесена прибыль по машинам и общие расходы.')}</div>
-      <div class="card panel"><div class="panel-h"><div><h2>Куда ушли машино-дни</h2><p>${f ? `${ymLabel(ym)} · ${f.worked + f.no_driver + f.idle + f.planned + f.unplanned} машино-дней${partial ? ' · по ячейкам графика' : ''}` : 'нет графика'}</p></div></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Куда ушли машино-дни</h2><p>${f ? `${ymLabel(ym)} · ${f.cal || f.worked + f.no_driver + f.idle + f.planned + f.unplanned} машино-дней${f.basis === 'template' ? ' · по «Отработано дней» из шаблона' : partial ? ' · по ячейкам графика' : ''}` : 'нет графика'}</p></div></div>
         ${f ? daysBlock(f) : empty('Нет графика', 'За этот месяц график работы не загружен.')}
         <div id="pyear" class="chart" style="height:180px" role="img" aria-label="Прибыль по месяцам"></div>
         ${lossTxt ? `<div class="callout">${lossTxt}</div>` : ''}</div>
@@ -742,7 +747,7 @@ PAGES.report = () => {
   const rows = carsWithProfit(ym).map(k => ({ k, p: allocation(ym).cars[k].alloc, raw: profitRaw(ym, k), d: workedOf(ym, k) })).sort((a, b) => b.raw - a.raw);
   const loss = rows.filter(r => r.raw < 0).length;
   const t = list => `<table><thead><tr><th>Машина</th><th>Прибыль</th><th>Раб. дн.</th><th>На раб. день</th></tr></thead><tbody>${list.map(r => `<tr><td><b>${name(r.k)}</b></td><td class="${r.raw < 0 ? 'neg-ink' : ''}">${rub(r.raw)}</td><td>${r.d ?? '—'}</td><td class="${r.raw < 0 ? 'neg-ink' : ''}">${r.d ? rub(r.raw / r.d) : '—'}</td></tr>`).join('')}</tbody></table>`;
-  const kNow = ki(ym), kPrev = SCHED[prev] ? ki(prev) : null;
+  const kNow = ki(ym), kPrev = ki(prev);
   const best = rows[0], worst = rows[rows.length - 1];
   $('#content').innerHTML = `<div class="a4" id="a4">
     <div class="rh"><div class="mark"><svg width="18" height="18" viewBox="0 0 18 18"><path d="M3 4.5h10.5M3 9h7.5M3 13.5h4.5" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="14" cy="12.5" r="2.4" fill="#14C8B4"/></svg></div>
@@ -804,9 +809,9 @@ PAGES.input = () => {
   const keys = monthCars(ym).sort((a, b) => name(a).localeCompare(name(b), 'ru', { numeric: true }));
   const inp = INPUT[ym] || {};
   const done = keys.filter(k => inp[k] && inp[k].km != null && entryTotals(inp[k]).hasRev).length;
-  $('#content').innerHTML = `${firstRunCard()}<div class="g21">
+  $('#content').innerHTML = `<div class="g21">
     <div class="stack">
-      <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон FiberTrack${ROLE === 'admin' ? ', таблица прибыли по машинам' : ''}, файл парка (график работы, «Анализ ЗАПРАВОК», «АВТО»)</p></div></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон месяца в Excel: машины, пробег, дни, доходы, расходы и общие расходы</p></div></div>
         <label class="drop" id="drop"><input type="file" id="file" hidden accept=".xlsx,.xlsm"><span class="ico-circle">${ico('upload', 20)}</span><h3>Перетащите файл сюда</h3><p>или нажмите, чтобы выбрать · Excel .xlsx до 20 МБ</p></label>
         <div id="preview"></div></div>
       <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода${SCHED[ym] ? '' : ' · графика ещё нет, в списке все машины в работе'}</p></div><div class="spacer"></div><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
@@ -834,32 +839,10 @@ PAGES.input = () => {
   drop.addEventListener('drop', e => uploadFile(e.dataTransfer.files[0], ym));
   $('#file').onchange = e => { uploadFile(e.target.files[0], ym); e.target.value = ''; };
   $('#tpl').onclick = () => downloadTemplate(ym);
-  bindFirstRun();
   $$('[data-row]').forEach(tr => tr.onclick = () => openEntry(ym, tr.dataset.row));
   if (UI.LAST_UPLOAD) showUpload(UI.LAST_UPLOAD);
   loadUploads();
 };
-/* первый запуск: истории ещё нет — владелец загружает таблицу прибыли и файл парка одной кнопкой */
-const firstRunCard = () => ROLE !== 'admin' || SCHED_YMS.length ? '' : `<div class="card panel fade" id="firstRun" style="margin-bottom:14px;border-color:var(--teal)">
-  <div class="panel-h"><div><h2>Первый запуск: загрузите историю</h2><p>Программа пока пустая. Выберите два файла — она заполнит справочник машин, график, заправки и прибыль за прошлые месяцы. Займёт около минуты.</p></div></div>
-  <div class="form" style="margin-top:0"><label>Таблица прибыли по машинам<input type="file" id="frProfit" accept=".xlsx,.xlsm"></label><label>Файл парка (график, «АВТО», заправки)<input type="file" id="frPark" accept=".xlsx,.xlsm"></label></div>
-  <div style="display:flex;gap:10px;align-items:center;margin-top:12px"><button class="btn primary" id="frGo">Загрузить историю</button><span class="muted" id="frMsg" style="font-size:13px"></span></div></div>`;
-function bindFirstRun() {
-  const go = $('#frGo'); if (!go) return;
-  go.onclick = async () => {
-    const pf = $('#frProfit').files[0], kf = $('#frPark').files[0], msg = $('#frMsg');
-    if (!pf || !kf) { msg.textContent = 'Выберите оба файла.'; return; }
-    const fd = new FormData(); fd.append('profit', pf); fd.append('park', kf);
-    go.disabled = true; msg.innerHTML = '<span class="spinner"></span> Загружаю… не закрывайте страницу';
-    try {
-      const res = await fetch('/api/import-history', { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf() } });
-      const data = await res.json().catch(() => null);
-      if (!res.ok) throw new Error((data && data.detail) || 'Не получилось загрузить. Повторите попытку.');
-      toast('История загружена: ' + Object.entries(data).map(([k, v]) => `${k} ${v}`).join(', '));
-      await refresh();
-    } catch (e) { go.disabled = false; msg.textContent = e.message; }
-  };
-}
 const uploadsCard = () => `<div class="card panel" style="margin-top:14px"><div class="panel-h"><div><h2>История загрузок</h2><p>последние 50 · ${ROLE === 'admin' ? 'применённую загрузку можно откатить целиком' : 'откатить загрузку может владелец'}</p></div></div><div id="uploads"><div class="sk" style="height:40px"></div></div></div>`;
 async function loadUploads() {
   const box = $('#uploads'); if (!box) return;

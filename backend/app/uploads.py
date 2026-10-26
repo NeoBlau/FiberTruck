@@ -186,6 +186,12 @@ class Ctx:
     def is_open(self, ym: str) -> bool:
         return self.periods.get(ym) == 'open'
 
+    def can_start(self, ym: str) -> bool:
+        """Месяц ещё не заводили (ни открыт, ни закрыт) и он не дальше трёх месяцев вперёд — шаблон откроет его сам."""
+        from .data import current_ym
+        y, m = map(int, current_ym().split('-'))
+        return ym not in self.periods and ym <= f'{y + (m + 2) // 12}-{(m + 2) % 12 + 1:02d}'
+
     def find_vehicle(self, raw) -> Vehicle | None:
         if raw is None:
             return None
@@ -388,10 +394,11 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
         raise UploadError('В шаблоне не хватает столбцов: ' + ', '.join(missing) + '. Скачайте шаблон заново.')
     cell = lambda r, c: r[col[c]] if c in col and col[c] < len(r) else None
     s = ctx.settings
-    month_open = ctx.is_open(ym)
+    month_new = ctx.can_start(ym)
+    month_open = ctx.is_open(ym) or month_new
     max_days = days_in(ym)
     rows, cars, shared = [], [], []
-    seen = set()
+    seen, new_cars = set(), {}
 
     def vat_gross(r, errs, has_money):
         try:
@@ -437,8 +444,17 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
             rows.append(row([cells['car'], cells['plate'], '', '', '', '', ''], 'skip', 'пусто — не меняется'))
             continue
         errs, warns = [], []
+        create = None
         if v is None:
-            errs.append('машина не найдена в справочнике')
+            key = parsing.car_key(name)
+            plate = re.sub(r'\s+', '', str(r[1] or '').upper()).translate(str.maketrans('ABEKMHOPCTYX', 'АВЕКМНОРСТУХ'))[:16] or None
+            if not key:
+                errs.append('не понял номер машины — в первом столбце нужен номер, например 885')
+            elif key in new_cars:
+                errs.append('машина повторяется в шаблоне')
+            else:
+                create = {'key': key, 'name': parsing.display(key), 'plate': plate}
+                warns.append('новая машина — будет добавлена в справочник')
         elif v.key in seen:
             errs.append('машина повторяется в шаблоне')
         try:
@@ -457,7 +473,7 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
         vat, gross = vat_gross(r, errs, bool(amounts))
         income = sum(amounts.get(a, 0) for a in INCOME_ARTICLES)
         expense = sum(k for a, k in amounts.items() if a not in INCOME_ARTICLES)
-        disp = [v.name if v else cells['car'], (v.plate if v else cells['plate']) or '', '' if km is None else f'{km:,}'.replace(',', ' '),
+        disp = [v.name if v else create['name'] if create else cells['car'], (v.plate if v else cells['plate']) or '', '' if km is None else f'{km:,}'.replace(',', ' '),
                 '' if days is None else str(days), rub(income) if income else '', rub(expense) if expense else '', vat or '']
         if errs:
             rows.append(row(disp, 'error', '; '.join(errs)))
@@ -465,8 +481,11 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
         if not month_open:
             rows.append(row(disp, 'skip', 'месяц закрыт'))
             continue
-        seen.add(v.key)
-        cars.append({'vehicle_id': v.id, 'key': v.key, 'km': km, 'days': days, 'amounts': amounts, 'vat': vat or '22%', 'gross': gross,
+        if create:
+            new_cars[create['key']] = create
+        else:
+            seen.add(v.key)
+        cars.append({'vehicle_id': v.id if v else None, 'create': create, 'key': v.key if v else create['key'], 'km': km, 'days': days, 'amounts': amounts, 'vat': vat or '22%', 'gross': gross,
                      'doc': str(cell(r, 'doc') or '').strip()[:128] or None})
         rows.append(row(disp, 'warn' if warns else 'ok', '; '.join(warns) or 'будет записано'))
 
@@ -533,6 +552,11 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
     if not month_open:
         notes.append(f'{ym_label(ym)} {"закрыт" if ctx.periods.get(ym) == "closed" else "не открыт"} для ввода — ничего не будет записано. '
                      'Попросите владельца открыть месяц.')
+    if month_new and (cars or shared):
+        notes.append(f'{ym_label(ym)} в программе ещё не заведён — после «Применить» он откроется для ввода.')
+    if new_cars and month_open:
+        notes.append(f'В справочник добавятся {plural(len(new_cars), "машина", "машины", "машин")} из шаблона. '
+                     'Марку, год и амортизацию можно дописать потом в «Справочнике машин».')
     if chosen_ym and chosen_ym != ym:
         notes.append(f'Шаблон за {ym_label(ym).lower()}, а на экране выбран {ym_label(chosen_ym).lower()}. Данные пойдут в {ym_label(ym).lower()} — как в шаблоне.')
     if bad_formulas:
@@ -548,7 +572,23 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
 
 def apply_template(ctx: Ctx, up: Upload, user: User, plan: dict, backup: dict) -> list[str]:
     db, ym = ctx.db, plan['ym']
+    if ym not in ctx.periods:
+        db.add(Period(ym=ym, status='open'))
+        log(db, user, 'period', ym_label(ym), 'Статус месяца (открыт загрузкой шаблона)', 'не начат', 'открыт')
+    added = 0
     for c in plan['cars']:
+        if c.get('create'):
+            n = c['create']
+            v = db.scalar(select(Vehicle).where(Vehicle.key == n['key']))
+            if v is None:
+                taken = n['plate'] and db.scalar(select(Vehicle.id).where(Vehicle.plate == n['plate']))
+                v = Vehicle(key=n['key'], name=n['name'], plate=None if taken else n['plate'], is_active=True, manual=True)
+                db.add(v)
+                db.flush()
+                backup['created_vehicles'].append(v.id)
+                log(db, user, 'vehicle', n['name'], 'Добавлена из шаблона', None, n['plate'] or '')
+                added += 1
+            c['vehicle_id'] = v.id
         vid = c['vehicle_id']
         old_ops = list(db.scalars(select(Operation).where(Operation.ym == ym, Operation.vehicle_id == vid, Operation.source.in_(('manual', 'template')))))
         old_mil = list(db.scalars(select(Mileage).where(Mileage.ym == ym, Mileage.vehicle_id == vid)))
@@ -575,6 +615,8 @@ def apply_template(ctx: Ctx, up: Upload, user: User, plan: dict, backup: dict) -
         db.add(Operation(ym=ym, vehicle_id=None, article=sh['article'], amount_gross_kop=g, amount_net_kop=n, vat_kop=v, vat_rate=sh['vat'],
                          vat_mode='gross' if sh['gross'] else 'net', source='template', document=sh['doc'], upload_id=up.id, entered_by=user.id))
     out = [plural(len(plan['cars']), 'машина', 'машины', 'машин')]
+    if added:
+        out.append(f'новых в справочнике: {added}')
     if plan['shared']:
         out.append(plural(len(plan['shared']), 'общая статья', 'общие статьи', 'общих статей'))
     return [f'{ym_label(ym)}: ' + ', '.join(out)]
@@ -880,7 +922,7 @@ def make_preview(db: Session, path: str, chosen_ym: str | None, role: str) -> di
 
 def apply_upload(db: Session, up: Upload, user: User) -> list[str]:
     ctx = Ctx(db)
-    closed = [m for m in up.months if m != 'vehicles' and not ctx.is_open(m)]
+    closed = [m for m in up.months if m != 'vehicles' and not ctx.is_open(m) and not (up.kind == 'template' and ctx.can_start(m))]
     if closed:
         raise UploadError(f'{ym_label(closed[0])} уже закрыт — загрузите файл заново после того, как владелец откроет месяц.')
     backup = {'operations': [], 'mileage': [], 'schedule_months': [], 'fuel_days': [], 'reference_values': [], 'reference_created': [],

@@ -23,7 +23,6 @@ MATRIX = {
     ('POST', '/api/uploads/{upload_id}/apply'): {'admin', 'input'},
     ('POST', '/api/uploads/{upload_id}/discard'): {'admin', 'input'},
     ('POST', '/api/uploads/{upload_id}/rollback'): {'admin'},
-    ('POST', '/api/import-history'): {'admin'},
     ('GET', '/api/template/{ym}'): {'admin', 'input'},
 }
 OPEN_TO_ALL = {('POST', '/api/auth/login'), ('POST', '/api/auth/logout'), ('GET', '/api/auth/me'), ('GET', '/api/bootstrap'), ('GET', '/api/health')}

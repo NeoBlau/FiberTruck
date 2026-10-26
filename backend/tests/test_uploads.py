@@ -207,27 +207,32 @@ def test_entered_money_reaches_reports_but_not_the_accountant():
     assert b['fin'] == {} and b['km'] == {}
 
 
-def no_history():
-    with SessionLocal() as db:
-        db.query(ScheduleMonth).delete()
-        db.commit()
+
+def test_template_alone_starts_month_and_adds_new_cars():
+    """Работа только через шаблон: новой машины нет в справочнике, месяц ещё не заводили."""
+    wb = openpyxl.load_workbook(io.BytesIO(own_template()))
+    ws = wb.active
+    ws.title, ws['A1'] = 'Сентябрь 2026', 'FiberTrack · шаблон ввода · Сентябрь 2026'
+    ws['A3'], ws['B3'] = '777', 'а777аа 58'
+    buf = io.BytesIO()
+    wb.save(buf)
+    u, a = login('input'), login('admin')
+    p = upload(u, buf.getvalue()).json()
+    assert p['months'] == ['2026-09'] and p['can_apply'], p
+    assert 'новая машина' in p['sections'][0]['rows'][0]['note'] and any('ещё не заведён' in n for n in p['sections'][0]['notes'])
+    assert u.post(f"/api/uploads/{p['id']}/apply").status_code == 200
+    d = a.get('/api/bootstrap').json()
+    assert d['periods']['2026-09'] == 'open'
+    assert d['vehicles']['777']['name'] == '777' and d['vehicles']['777']['plate'] == 'А777АА58'
+    assert d['fin']['2026-09']['cars']['777']['g']['revenue'] == 1155000
+    assert a.post(f"/api/uploads/{p['id']}/rollback").status_code == 200
+    assert '777' not in a.get('/api/bootstrap').json()['vehicles']            # откат убирает и добавленную машину
 
 
-def test_first_run_import_is_owner_only_and_checks_files():
-    no_history()
-    tpl = filled_template(login('admin'), C3=1000)
-    files = {'profit': ('прибыль.xlsx', tpl), 'park': ('парк.xlsx', tpl)}
-    assert login('input').post('/api/import-history', files=files).status_code == 403
-    assert login('viewer').post('/api/import-history', files=files).status_code == 403
-    r = login('admin').post('/api/import-history', files=files)
-    assert r.status_code == 422 and 'не таблица прибыли' in r.json()['detail']
-
-
-@real
-def test_first_run_import_fills_empty_program_once():
-    no_history()
-    a = login('admin')
-    files = {'profit': ('прибыль.xlsx', open(PROFIT, 'rb').read()), 'park': ('парк.xlsx', open(PARK, 'rb').read())}
-    r = a.post('/api/import-history', files=files)
-    assert r.status_code == 200 and r.json()['месяцев графика'] > 30, r.text
-    assert a.post('/api/import-history', files=files).status_code == 409    # второй раз — только обычной загрузкой
+def test_template_does_not_reopen_closed_month():
+    wb = openpyxl.load_workbook(io.BytesIO(own_template()))
+    wb.active['A1'] = 'FiberTrack · шаблон ввода · Август 2026'
+    buf = io.BytesIO()
+    wb.save(buf)
+    p = upload(login('admin'), buf.getvalue()).json()
+    assert not p['can_apply'] and 'закрыт' in ' '.join(p['sections'][0]['notes'])

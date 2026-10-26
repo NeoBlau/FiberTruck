@@ -545,6 +545,7 @@ PAGES.heatmap = () => {
   const legend = Object.entries(ST).filter(([c]) => c !== 't').map(([c, [n, v]]) => `<span><i style="background:${v ? `var(${v})` : 'transparent'};box-shadow:inset 0 0 0 1px var(--border-strong)"></i>${n}</span>`).join('');
   if (HM.mode === 'days') {
     const m = SCHED[ym];
+    if (!m && !SCHED_YMS.length) { $('#content').innerHTML = empty('Графика пока нет', 'Тепловая карта строится по графику работы машин. Загрузите файл парка на экране «Загрузка и ввод».', 'heat'); return; }
     if (!m) { $('#content').innerHTML = empty('Графика нет', `За ${ymLabel(ym).toLowerCase()} график работы не загружен. Он есть с ${ymLabel(SCHED_YMS[0]).toLowerCase()} по ${ymLabel(SCHED_YMS[SCHED_YMS.length - 1]).toLowerCase()}.`, 'heat'); return; }
     const nd = daysIn(ym); const [y, mm] = ym.split('-').map(Number);
     const rows = m.rows.slice().map(r => ({ r, w: (r.c.match(/[Tt]/g) || []).length })).sort((a, b) => HM.sort === 'ki' ? b.w - a.w : name(a.r.k).localeCompare(name(b.r.k), 'ru', { numeric: true }));
@@ -634,6 +635,7 @@ PAGES.years = () => {
 /* ---------- Топливо ---------- */
 PAGES.fuel = () => {
   const fyms = Object.keys(D.fuel_month).sort();
+  if (!fyms.length) { topbar('Топливо'); $('#content').innerHTML = empty('Заправок пока нет', 'Здесь будут литры по картам и ГЛОНАСС. Загрузите файл парка на экране «Загрузка и ввод» — лист «Анализ ЗАПРАВОК».', 'fuel'); return; }
   let ym = fyms.includes(STATE.ym) ? STATE.ym : fyms[fyms.length - 1];
   topbar('Топливо', { extra: `<div class="seg">${fyms.map(y => `<button data-fy="${y}" class="${y === ym ? 'on' : ''}">${ymShort(y)}</button>`).join('')}</div>` });
   $$('[data-fy]').forEach(b => b.onclick = () => { STATE.ym = b.dataset.fy; render(); });
@@ -672,6 +674,7 @@ PAGES.dynamics = () => {
   topbar('Динамика парка');
   const hist = D.idle_hist; // [worked, no_driver, idle, planned, unplanned] с 2021
   const yms = [...new Set([...Object.keys(hist), ...SCHED_YMS])].sort();
+  if (!yms.length) { $('#content').innerHTML = empty('Данных пока нет', 'Динамика строится по графику работы и листу «Анализ простоев». Загрузите файл парка на экране «Загрузка и ввод».', 'dyn'); return; }
   const val = (ym, i) => hist[ym] ? hist[ym][i] : (() => { const f = fleetDays(ym); return f ? [f.worked, f.no_driver, f.idle, f.planned, f.unplanned][i] : null; })();
   const kis = yms.map(y => SCHED[y] ? ki(y) : null);
   $('#content').innerHTML = `<div class="note">${ico('info')}<div>Итоги по парку — из листа «Анализ простоев» (с января 2021). Помашинный график есть с августа 2023, поэтому КИ считается с этого месяца. ${SCHED_YMS.filter(y => !SCHED[y].manual).length ? `Без ручных итогов диспетчера (${SCHED_YMS.filter(y => !SCHED[y].manual).map(y => ymLabel(y).toLowerCase()).join(', ')}) дни посчитаны по ячейкам графика.` : ''}</div></div>
@@ -731,7 +734,8 @@ PAGES.recon = () => {
 
 /* ---------- Отчёт для руководителя (A4) ---------- */
 PAGES.report = () => {
-  if (!hasProfit(STATE.ym)) STATE.ym = LAST_PROFIT;
+  if (!hasProfit(STATE.ym) && LAST_PROFIT) STATE.ym = LAST_PROFIT;
+  if (!hasProfit(STATE.ym)) { topbar('Отчёт для руководителя'); $('#content').innerHTML = empty('Отчёт пока не из чего собрать', 'Отчёт появится, когда за месяц будут доходы и расходы: загрузите шаблон месяца на экране «Загрузка и ввод».', 'report'); return; }
   const ym = STATE.ym, prev = prevYm(ym);
   topbar('Отчёт для руководителя', { month: true, extra: `<button class="btn primary" id="print">${ico('pdf', 15)}Печать / PDF</button><button class="btn hide-m" id="xls">${ico('xls', 15)}Excel</button>` });
   const f = fleetDays(ym), P = fleetTotal(ym), PP = hasProfit(prev) ? fleetTotal(prev) : null;
@@ -775,7 +779,12 @@ const PERIOD_YMS = () => { const out = []; let y = Object.keys(PERIODS).sort()[0
 const openMonths = () => PERIOD_YMS().filter(y => periodStatus(y) === 'open');
 /* машины месяца: из графика, а для месяца без графика — все машины в работе */
 const LAST_SCHED = SCHED_YMS[SCHED_YMS.length - 1];
-const monthCars = ym => [...new Set([...(SCHED[ym] ? SCHED[ym].rows.map(r => r.k) : SCHED[LAST_SCHED].rows.map(r => r.k)), ...Object.keys(V).filter(k => V[k].manual)])].filter(k => V[k] && isActive(k, V[k]));
+/* машины месяца: из графика месяца, иначе из последнего графика; графиков нет — весь действующий парк */
+const monthCars = ym => {
+  const src = SCHED[ym] || SCHED[LAST_SCHED];
+  const keys = src ? [...src.rows.map(r => r.k), ...Object.keys(V).filter(k => V[k].manual)] : Object.keys(V);
+  return [...new Set(keys)].filter(k => V[k] && isActive(k, V[k]));
+};
 const ARTICLES = [['revenue', 'Выручка от перевозок'], ['other_income', 'Прочий доход'], ['fuel', 'Топливо'], ['repair', 'Ремонт и запчасти'],
   ['maintenance', 'ТО'], ['tires', 'Шины'], ['salary', 'Зарплата водителей'], ['per_diem', 'Суточные'], ['tolls', 'Платные дороги и «Платон»'],
   ['insurance', 'Страхование'], ['leasing', 'Лизинг / кредит'], ['wash', 'Мойка'], ['fines', 'Штрафы'], ['other', 'Прочее']];
@@ -795,7 +804,7 @@ PAGES.input = () => {
   const keys = monthCars(ym).sort((a, b) => name(a).localeCompare(name(b), 'ru', { numeric: true }));
   const inp = INPUT[ym] || {};
   const done = keys.filter(k => inp[k] && inp[k].km != null && entryTotals(inp[k]).hasRev).length;
-  $('#content').innerHTML = `<div class="g21">
+  $('#content').innerHTML = `${firstRunCard()}<div class="g21">
     <div class="stack">
       <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон FiberTrack${ROLE === 'admin' ? ', таблица прибыли по машинам' : ''}, файл парка (график работы, «Анализ ЗАПРАВОК», «АВТО»)</p></div></div>
         <label class="drop" id="drop"><input type="file" id="file" hidden accept=".xlsx,.xlsm"><span class="ico-circle">${ico('upload', 20)}</span><h3>Перетащите файл сюда</h3><p>или нажмите, чтобы выбрать · Excel .xlsx до 20 МБ</p></label>
@@ -825,10 +834,32 @@ PAGES.input = () => {
   drop.addEventListener('drop', e => uploadFile(e.dataTransfer.files[0], ym));
   $('#file').onchange = e => { uploadFile(e.target.files[0], ym); e.target.value = ''; };
   $('#tpl').onclick = () => downloadTemplate(ym);
+  bindFirstRun();
   $$('[data-row]').forEach(tr => tr.onclick = () => openEntry(ym, tr.dataset.row));
   if (UI.LAST_UPLOAD) showUpload(UI.LAST_UPLOAD);
   loadUploads();
 };
+/* первый запуск: истории ещё нет — владелец загружает таблицу прибыли и файл парка одной кнопкой */
+const firstRunCard = () => ROLE !== 'admin' || SCHED_YMS.length ? '' : `<div class="card panel fade" id="firstRun" style="margin-bottom:14px;border-color:var(--teal)">
+  <div class="panel-h"><div><h2>Первый запуск: загрузите историю</h2><p>Программа пока пустая. Выберите два файла — она заполнит справочник машин, график, заправки и прибыль за прошлые месяцы. Займёт около минуты.</p></div></div>
+  <div class="form" style="margin-top:0"><label>Таблица прибыли по машинам<input type="file" id="frProfit" accept=".xlsx,.xlsm"></label><label>Файл парка (график, «АВТО», заправки)<input type="file" id="frPark" accept=".xlsx,.xlsm"></label></div>
+  <div style="display:flex;gap:10px;align-items:center;margin-top:12px"><button class="btn primary" id="frGo">Загрузить историю</button><span class="muted" id="frMsg" style="font-size:13px"></span></div></div>`;
+function bindFirstRun() {
+  const go = $('#frGo'); if (!go) return;
+  go.onclick = async () => {
+    const pf = $('#frProfit').files[0], kf = $('#frPark').files[0], msg = $('#frMsg');
+    if (!pf || !kf) { msg.textContent = 'Выберите оба файла.'; return; }
+    const fd = new FormData(); fd.append('profit', pf); fd.append('park', kf);
+    go.disabled = true; msg.innerHTML = '<span class="spinner"></span> Загружаю… не закрывайте страницу';
+    try {
+      const res = await fetch('/api/import-history', { method: 'POST', body: fd, credentials: 'same-origin', headers: { 'X-CSRF-Token': csrf() } });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) throw new Error((data && data.detail) || 'Не получилось загрузить. Повторите попытку.');
+      toast('История загружена: ' + Object.entries(data).map(([k, v]) => `${k} ${v}`).join(', '));
+      await refresh();
+    } catch (e) { go.disabled = false; msg.textContent = e.message; }
+  };
+}
 const uploadsCard = () => `<div class="card panel" style="margin-top:14px"><div class="panel-h"><div><h2>История загрузок</h2><p>последние 50 · ${ROLE === 'admin' ? 'применённую загрузку можно откатить целиком' : 'откатить загрузку может владелец'}</p></div></div><div id="uploads"><div class="sk" style="height:40px"></div></div></div>`;
 async function loadUploads() {
   const box = $('#uploads'); if (!box) return;

@@ -205,3 +205,29 @@ def test_entered_money_reaches_reports_but_not_the_accountant():
     assert d['km']['2026-10']['885'] == 10000
     b = u.get('/api/bootstrap').json()
     assert b['fin'] == {} and b['km'] == {}
+
+
+def no_history():
+    with SessionLocal() as db:
+        db.query(ScheduleMonth).delete()
+        db.commit()
+
+
+def test_first_run_import_is_owner_only_and_checks_files():
+    no_history()
+    tpl = filled_template(login('admin'), C3=1000)
+    files = {'profit': ('прибыль.xlsx', tpl), 'park': ('парк.xlsx', tpl)}
+    assert login('input').post('/api/import-history', files=files).status_code == 403
+    assert login('viewer').post('/api/import-history', files=files).status_code == 403
+    r = login('admin').post('/api/import-history', files=files)
+    assert r.status_code == 422 and 'не таблица прибыли' in r.json()['detail']
+
+
+@real
+def test_first_run_import_fills_empty_program_once():
+    no_history()
+    a = login('admin')
+    files = {'profit': ('прибыль.xlsx', open(PROFIT, 'rb').read()), 'park': ('парк.xlsx', open(PARK, 'rb').read())}
+    r = a.post('/api/import-history', files=files)
+    assert r.status_code == 200 and r.json()['месяцев графика'] > 30, r.text
+    assert a.post('/api/import-history', files=files).status_code == 409    # второй раз — только обычной загрузкой

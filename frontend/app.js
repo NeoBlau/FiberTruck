@@ -310,7 +310,9 @@ function daysBlock(f) {
 }
 
 /* ---------- маршрутизация ---------- */
-if (!UI.STATE) UI.STATE = { ym: LAST_PROFIT || CUR_YM_FALLBACK(), vat: 'asis' };
+/* выбранный месяц переживает перезагрузку страницы (у каждого пользователя в своём браузере) */
+const savedYm = (() => { try { const v = localStorage.getItem('ft-ym'); return v && (PROFIT_YMS.includes(v) || SCHED_YMS.includes(v) || D.periods[v]) ? v : null; } catch (e) { return null; } })();
+if (!UI.STATE) UI.STATE = { ym: savedYm || LAST_PROFIT || CUR_YM_FALLBACK(), vat: 'asis' };
 const STATE = UI.STATE;
 function parseHash() { const h = location.hash.replace(/^#\/?/, ''); const [path, q] = h.split('?'); const parts = (path || 'dashboard').split('/'); return { page: parts[0], arg: parts[1] ? decodeURIComponent(parts[1]) : null, q: new URLSearchParams(q || '') }; }
 const allowed = page => { const n = NAV.find(x => x[0] === page); return n && n[3] ? n[3].includes(ROLE) : page === 'car' ? ROLE !== 'input' : false; };
@@ -848,6 +850,9 @@ async function loadUploads() {
   const box = $('#uploads'); if (!box) return;
   let list;
   try { list = await api('/api/uploads'); } catch (e) { box.innerHTML = `<p class="muted">${esc(e.message)}</p>`; return; }
+  /* файл загрузили, но «Применить» не нажали, а страницу перезагрузили — возвращаем предпросмотр */
+  const pending = list.find(u => u.status === 'parsed' && u.uploaded_by === D.me.name);
+  if (pending && !UI.LAST_UPLOAD && $('#preview') && !$('#preview').innerHTML.trim()) api(`/api/uploads/${pending.id}`).then(u => { if (!UI.LAST_UPLOAD) showUpload(u); }).catch(() => {});
   if (!list.length) { box.innerHTML = empty('Загрузок пока нет', 'Здесь появятся все загруженные файлы: кто, когда и что они изменили.', 'upload'); return; }
   const chip = s => ({ applied: 'pos', parsed: 'warn', rolled_back: '' })[s] ?? '';
   box.innerHTML = `<div class="tbl-wrap" style="max-height:420px"><table><thead><tr><th>№</th><th class="l">Файл</th><th class="l col-m">Что</th><th class="l col-m">Кто и когда</th><th class="l">Статус</th><th></th></tr></thead><tbody>
@@ -1197,6 +1202,7 @@ function render() {
   $('#side').classList.remove('open');
   $('#content').innerHTML = `<div class="kpis">${'<div class="card kpi"><div class="sk" style="height:12px;width:60%"></div><div class="sk" style="height:24px;width:80%;margin-top:14px"></div></div>'.repeat(6)}</div>`;
   PAGES[page](arg);
+  try { localStorage.setItem('ft-ym', STATE.ym); } catch (e) {}
   window.scrollTo({ top: 0 });
 }
 return { render, resize: () => charts.forEach(c => c.resize()) };

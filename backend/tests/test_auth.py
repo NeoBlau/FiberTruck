@@ -69,3 +69,12 @@ def test_init_users_creates_three_roles_once():
     reset = init_users(reset=True)
     assert reset[0][3] != first[0][3]
     assert TestClient(app).post('/api/auth/login', json={'login': 'owner', 'password': first[0][3]}).status_code == 401
+
+
+def test_pages_are_never_served_stale():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    html = c.get('/login')
+    assert html.headers['cache-control'] == 'no-cache' and '/static/app.css?v=' in html.text
+    assert c.get('/static/app.css').headers['cache-control'] == 'no-cache'

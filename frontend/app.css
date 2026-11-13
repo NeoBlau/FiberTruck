@@ -257,12 +257,21 @@ input:focus,select:focus,button:focus-visible{outline:2px solid color-mix(in srg
   .cal{gap:4px} .cal .d{min-height:40px;padding:5px} .cal .d .t{display:none}
 }
 @media print{
-  @page{size:A4;margin:0}
+  @page{size:A4;margin:10mm}
   body{background:#fff}
   .side,.top,.no-print,.toast,.tipbox{display:none!important}
   .app{display:block}
   .content{padding:0;max-width:none}
-  .a4{box-shadow:none;border-radius:0;margin:0;width:210mm;height:297mm;overflow:hidden}
+  .a4{box-shadow:none;border-radius:0;margin:0;padding:0;width:100%;height:auto;min-height:0;overflow:visible;display:block}
+  .a4>div,.a4>section{margin-bottom:5mm}
+  .a4 thead{display:table-header-group}
+  .a4 tr,.report-car{break-inside:avoid}
+  .a4 .full-detail{overflow:visible}
+  .a4 .full-detail table{width:100%;table-layout:fixed}
+  .a4 .full-detail td,.a4 .full-detail th{white-space:normal;overflow-wrap:anywhere;font-size:8px;padding:1mm}
+  .a4 .report-ranking{break-before:page}
+  .a4 .report-articles{break-before:page}
+  .a4 .report-car{margin-bottom:5mm}
 }
 
 /* загрузки */
@@ -284,3 +293,6 @@ input:focus,select:focus,button:focus-visible{outline:2px solid color-mix(in srg
 .upl-note{white-space:normal;min-width:180px}
 .upl-a{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
 .upl-sub{font-size:11px;font-weight:600;color:var(--ink-3);text-transform:uppercase;letter-spacing:.06em;margin-top:6px}
+
+.month select{background:var(--surface);color:var(--ink);border:1px solid var(--border);border-radius:6px;padding:7px;font:inherit;max-width:180px}
+.report-articles{display:block}.report-car{margin:18px 0}.full-detail{max-height:none}.a4 .full-detail table{min-width:0}.a4 .full-detail th{white-space:normal}

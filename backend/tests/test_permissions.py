@@ -9,6 +9,7 @@ from tests.conftest import SECRET_PROFIT_RUB, login
 
 # Кому разрешён каждый изменяющий маршрут. Новый маршрут без записи здесь — тест упадёт.
 MATRIX = {
+    ('GET', '/api/backup'): {'admin'},
     ('PUT', '/api/settings'): {'admin'},
     ('POST', '/api/vehicles'): {'admin', 'input'},
     ('PATCH', '/api/vehicles/{key}'): {'admin', 'input'},

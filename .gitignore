@@ -18,3 +18,7 @@ backend/shots/
 dist/
 .credentials
 backend/uploads/
+
+# Local verification tools, before snapshots and generated downloads
+.tools/
+artifacts/

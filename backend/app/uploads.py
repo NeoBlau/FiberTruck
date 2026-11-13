@@ -549,6 +549,8 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
             shared.append({'article': art, 'kop': k, 'vat': vat, 'gross': gross, 'doc': str(doc or '').strip()[:128] or None})
             shared_rows.append(row(disp, 'ok', detail or 'будет записано'))
     notes = []
+    if not cars and not shared:
+        notes.append('В файле нет заполненных пробегов, рабочих дней, доходов или расходов. Номера машин и ставка НДС не являются данными месяца. Заполните показатели в Excel и загрузите файл повторно.')
     if not month_open:
         notes.append(f'{ym_label(ym)} {"закрыт" if ctx.periods.get(ym) == "closed" else "не открыт"} для ввода — ничего не будет записано. '
                      'Попросите владельца открыть месяц.')
@@ -664,16 +666,38 @@ def plan_profit(ctx: Ctx, wb) -> dict:
             notes.append(f'{r["cells"][0]}: в файле итог {r["cells"][4]}, а в программе другой. Месяц закрыт — чтобы обновить, владелец переоткрывает его.')
     if errors_cars:
         notes.append('В справочнике нет машин: ' + ', '.join(errors_cars) + '. Их прибыль не будет записана — добавьте машины в справочник и загрузите файл снова.')
-    return {'kind': 'profit', 'months': [m['ym'] for m in plan_months], 'sections': [
-        section('profit', f'Прибыль по машинам · {year}', ['Месяц', 'Машин', 'Прибыль машин', 'Общие и амортизация', 'Итог «Общий»'], rows, notes,
-                f'{len(plan_months)} мес. будет записано')],
-        'plan': {'months': plan_months}}
+    # Fill only missing reference values, with an explicit preview. Existing values stay intact.
+    amort_changes, amort_rows = [], []
+    for key, v in known.items():
+        if v.amort_kop is not None or v.edited:
+            continue
+        try:
+            value = money_kop(cars[key].get('amort'))
+        except ValueError:
+            value = None
+        if value is not None and value >= 0:
+            amort_changes.append({'id': v.id, 'value': value})
+            amort_rows.append(row([v.name, 'не заполнена', rub(value)], 'ok', 'будет записано в справочник'))
+    sections = [section('profit', f'Прибыль по машинам · {year}', ['Месяц', 'Машин', 'Прибыль машин', 'Общие и амортизация', 'Итог «Общий»'], rows, notes,
+                        f'{len(plan_months)} мес. будет записано')]
+    if amort_rows:
+        sections.append(section('amort', 'Амортизация в справочнике', ['Машина', 'Было', 'Станет'], amort_rows,
+                                ['Заполняются только пустые значения. Ранее введённые суммы и вручную изменённые машины сохраняются.']))
+    return {'kind': 'profit', 'months': [m['ym'] for m in plan_months] + (['vehicles'] if amort_changes else []),
+            'sections': sections, 'plan': {'months': plan_months, 'amort_changes': amort_changes}}
 
 
 def apply_profit(ctx: Ctx, up: Upload, user: User, plan: dict, backup: dict) -> list[str]:
     db = ctx.db
     arts = {'tractor': 'shared_tractor', 'gen': 'shared_gen', 'service': 'shared_service', 'amort': 'shared_amort'}
     done = []
+    for change in plan.get('amort_changes', []):
+        v = db.get(Vehicle, change['id'])
+        if v is not None and v.amort_kop is None and not v.edited:
+            backup['vehicles'].append({'id': v.id, 'before': {'amort_kop': None}, 'after': {'amort_kop': change['value']}})
+            v.amort_kop = change['value']
+            log(db, user, 'vehicle', v.name, 'Амортизация в месяц', None, rub(change['value']))
+            done.append(f'{v.name}: заполнена амортизация {rub(change["value"])}')
     for m in plan['months']:
         ym = m['ym']
         old = list(db.scalars(select(Operation).where(Operation.ym == ym, Operation.source.in_(('import', 'upload')),

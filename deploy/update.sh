@@ -15,16 +15,30 @@ else
   COMPOSE=(docker compose)
   HEALTH=""
 fi
-say "1/3 Код"
+say "1/4 Резервная копия перед обновлением"
+# Только чтение текущей базы и файлов. Ошибка копирования останавливает обновление.
+BACKUP_DIR="backups/before-update-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -p "$BACKUP_DIR"
+chmod 700 "$BACKUP_DIR"
+cp -p .env "$BACKUP_DIR/server.env"
+chmod 600 "$BACKUP_DIR/server.env"
+"${COMPOSE[@]}" exec -T db sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --no-owner --no-acl' | gzip > "$BACKUP_DIR/database.sql.gz"
+"${COMPOSE[@]}" exec -T backend tar -C /app/backend -czf - uploads > "$BACKUP_DIR/uploads.tar.gz"
+gzip -t "$BACKUP_DIR/database.sql.gz"
+tar -tzf "$BACKUP_DIR/uploads.tar.gz" >/dev/null
+chmod 600 "$BACKUP_DIR/"*
+echo "  сохранено: $BACKUP_DIR"
+say "2/4 Код"
 if [ -d .git ] && [ "${FT_NO_PULL:-}" != 1 ]; then
   git pull --ff-only || die "git pull не прошёл. Если меняли файлы проекта вручную — пришлите вывод git status."
 else
   [ "${FT_NO_PULL:-}" = 1 ] || printf '\033[1;33m  Папка не из git — новая версия НЕ скачана. Распакуйте свежий архив fibertrack.zip поверх этой папки (.env не трогайте) и запустите скрипт снова.\033[0m\n'
   echo "  использую текущие файлы"
 fi
-say "2/3 Пересборка и перезапуск (данные сохраняются)"
-if [ "${FT_NO_BUILD:-}" = 1 ]; then "${COMPOSE[@]}" up -d; else "${COMPOSE[@]}" up -d --build; fi
-say "3/3 Проверка"
+say "3/4 Пересборка только программы (база и тома остаются на месте)"
+if [ "${FT_NO_BUILD:-}" != 1 ]; then "${COMPOSE[@]}" build backend; fi
+"${COMPOSE[@]}" up -d --no-deps backend
+say "4/4 Проверка"
 for i in $(seq 1 60); do
   if [ -n "$HEALTH" ]; then curl -fs "$HEALTH" >/dev/null 2>&1 && break
   else "${COMPOSE[@]}" exec -T backend python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/health')" >/dev/null 2>&1 && break; fi

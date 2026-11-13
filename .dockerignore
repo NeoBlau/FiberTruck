@@ -6,3 +6,12 @@ backups/
 prototype/dist/
 backend/shots/
 .git
+artifacts/
+.tools/
+backend/uploads/
+.env
+.env.*
+!.env.example
+.credentials
+**/node_modules
+docs/screens/

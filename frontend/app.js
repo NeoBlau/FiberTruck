@@ -21,8 +21,29 @@ async function api(path, { method = 'GET', body } = {}) {
 }
 /* состояние интерфейса переживает перезагрузку данных после сохранения */
 const UI = { LAST_UPLOAD: null, STATE: null, ALLOC_ON: true, CARS_UI: { q: '', make: 'all', loss: false, sort: 'p', dir: -1 }, HM: { mode: 'days', sort: 'ki' }, FLEET_UI: { q: '', show: 'active' } };
-let app = null;
-async function refresh() { const D = await api('/api/bootstrap'); app = createApp(D); app.render(); }
+let app = null, refreshing = null, lastPayload = '';
+async function refresh(quiet = false) {
+  if (refreshing) return refreshing;
+  refreshing = (async () => {
+    const D = await api('/api/bootstrap'), payload = JSON.stringify(D);
+    if (quiet && payload === lastPayload) return;
+    const scroll = window.scrollY;
+    lastPayload = payload;
+    if (app) app.dispose();
+    app = createApp(D); app.render();
+    if (quiet) window.scrollTo({top: scroll});
+  })();
+  try { await refreshing; } finally { refreshing = null; }
+}
+function syncViewingScreen() {
+  const page = location.hash.replace(/^#\/?/, '').split('/')[0] || 'dashboard';
+  if (!app || document.hidden || !['dashboard','cars','car','heatmap','fuel','years','dynamics','recon','report'].includes(page) ||
+      document.querySelector('#modal.open') || ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) return;
+  refresh(true).catch(e => { const button = document.getElementById('refreshData'); if (button) button.title = e.message; });
+}
+addEventListener('focus', syncViewingScreen);
+document.addEventListener('visibilitychange', syncViewingScreen);
+setInterval(syncViewingScreen, 60000);
 
 function createApp(D) {
 const $ = (s, el = document) => el.querySelector(s);
@@ -95,7 +116,7 @@ const REP_YEAR = () => ((UI.STATE && UI.STATE.ym) || D.generated).slice(0, 4);
 const SCHED = Object.fromEntries(D.schedule.map(m => [m.ym, m]));
 const PROFIT_YMS = PROFIT_MONTHS.filter(hasProfit);
 const SCHED_YMS = D.schedule.map(m => m.ym);
-const ALL_YMS = [...new Set([...SCHED_YMS, ...PROFIT_YMS])].sort();
+const ALL_YMS = [...new Set([...SCHED_YMS, ...PROFIT_YMS, ...Object.keys(D.periods || {}), ...Object.keys(INPUT)])].sort();
 /* месяц по умолчанию: последний, где прибыль из таблицы или введено хотя бы по половине машин */
 const isComplete = ym => histMonth(ym) || finMonth(ym);
 const LAST_PROFIT = [...PROFIT_YMS].reverse().find(isComplete) || PROFIT_YMS[PROFIT_YMS.length - 1];
@@ -113,9 +134,9 @@ function filledDays(ym) {
 function rowOf(ym, k) { const m = SCHED[ym]; return m ? m.rows.find(r => r.k === k) : null; }
 /* дни машины за месяц: ручные итоги диспетчера главнее, иначе пересчёт по ячейкам */
 function daysOf(ym, k) {
-  const r = rowOf(ym, k); if (!r) return null;
+  const r = rowOf(ym, k); if (!r) { const w = ((D.wdays || {})[ym] || {})[k]; return w == null ? null : { worked: w, no_driver: null, idle: null, planned: null, unplanned: null, basis: 'template' }; }
   const src = r.tot || r.calc;
-  return { worked: src.worked || 0, no_driver: src.no_driver || 0, idle: (src.idle || 0) + (src.loading || 0) + (src.unloading || 0),
+  return { worked: ((D.wdays || {})[ym] || {})[k] ?? src.worked ?? 0, no_driver: src.no_driver || 0, idle: (src.idle || 0) + (src.loading || 0) + (src.unloading || 0),
            planned: src.planned || 0, unplanned: src.unplanned || 0, basis: r.tot ? 'manual' : 'calc' };
 }
 function fleetDays(ym) {
@@ -127,17 +148,18 @@ function fleetDays(ym) {
     const n = Object.keys(wd).length, worked = Object.values(wd).reduce((a, b) => a + b, 0);
     return { ...z, worked, off: n * daysIn(ym) - worked, cars: n, cal: n * daysIn(ym), filled: daysIn(ym), basis: 'template' };
   }
-  const fd = m.manual ? daysIn(ym) : filledDays(ym);
+  const fd = m.manual || Object.keys((D.wdays || {})[ym] || {}).length ? daysIn(ym) : filledDays(ym);
   for (const r of m.rows) {
     const d = daysOf(ym, r.k); z.cars++; z.cal += fd;
     for (const f of ['worked','no_driver','idle','planned','unplanned']) z[f] += d[f];
     if (d.basis === 'calc') z.basis = 'calc';
   }
+  for (const [k,w] of Object.entries((D.wdays || {})[ym] || {})) { if (!m.rows.some(r=>r.k===k)) { z.cars++; z.cal+=daysIn(ym); z.worked+=w; } }
   z.filled = fd;
   return z;
 }
 const ki = ym => { const f = fleetDays(ym); return f && f.cal ? f.worked / f.cal * 100 : null; };
-const carKi = (ym, k) => { const d = daysOf(ym, k); if (!d) return null; const fd = SCHED[ym].manual ? daysIn(ym) : filledDays(ym); return fd ? d.worked / fd * 100 : null; };
+const carKi = (ym, k) => { const d = daysOf(ym, k); if (!d) return null; const fd = !SCHED[ym] || SCHED[ym].manual || ((D.wdays || {})[ym] || {})[k] != null ? daysIn(ym) : filledDays(ym); return fd ? d.worked / fd * 100 : null; };
 
 /* прибыль машины: строка таблицы прибыли главнее; если её нет — доходы минус расходы из введённых статей */
 const profitRaw = (ym, k) => { const h = histProfit(ym, k); if (h != null) return h; return finCar(ym, k) ? carIncome(ym, k) - carExpense(ym, k) : null; };
@@ -177,7 +199,13 @@ function allocation(ym) {
   let W = keys.reduce((s, k) => s + w[k], 0);
   if (!W) { keys.forEach(k => w[k] = 1); W = keys.length; }
   const out = {};
-  keys.forEach(k => out[k] = { raw: profitRaw(ym, k), amort: -am(k), share: pool * w[k] / W, alloc: profitRaw(ym, k) - am(k) + pool * w[k] / W });
+  // Distribute whole kopecks; the sum of car allocations must match the fleet total.
+  const poolKop = Math.round(Math.abs(pool) * 100), sign = pool < 0 ? -1 : 1;
+  const parts = keys.map((k, i) => { const exact = W ? poolKop * w[k] / W : 0; return {k, i, kop: Math.floor(exact), fraction: exact - Math.floor(exact)}; });
+  const remainder = poolKop - parts.reduce((s, p) => s + p.kop, 0);
+  parts.sort((a,b) => b.fraction - a.fraction || a.i - b.i);
+  parts.forEach((p,i) => { const share = sign * (p.kop + (i < remainder ? 1 : 0)) / 100;
+    out[p.k] = {raw: profitRaw(ym,p.k), amort: -am(p.k), share, alloc: Math.round((profitRaw(ym,p.k) - am(p.k) + share) * 100) / 100}; });
   return { cars: out, pool, residual };
 }
 const carProfit = (ym, k) => { if (profitRaw(ym, k) == null) return null; return UI.ALLOC_ON ? allocation(ym).cars[k].alloc : profitRaw(ym, k); };
@@ -328,10 +356,12 @@ function renderNav(page) {
 }
 function topbar(title, opts = {}) {
   const ym = STATE.ym;
-  const monthCtl = opts.month ? `<div class="month"><button class="btn" data-mo="-1" aria-label="Предыдущий месяц" ${ALL_YMS.indexOf(ym) <= 0 ? 'disabled' : ''}>${ico('prev', 15)}</button><strong>${ymLabel(ym)}</strong><button class="btn" data-mo="1" aria-label="Следующий месяц" ${ALL_YMS.indexOf(ym) >= ALL_YMS.length - 1 ? 'disabled' : ''}>${ico('next', 15)}</button></div>` : '';
+  const monthCtl = opts.month ? `<div class="month"><button class="btn" data-mo="-1" aria-label="Предыдущий месяц" ${ALL_YMS.indexOf(ym) <= 0 ? 'disabled' : ''}>${ico('prev', 15)}</button><select id="selectedMonth" aria-label="Месяц">${[...new Set([...ALL_YMS, ym])].sort().map(y => `<option value="${y}" ${y === ym ? 'selected' : ''}>${ymLabel(y)}</option>`).join('')}</select><button class="btn" data-mo="1" aria-label="Следующий месяц" ${ALL_YMS.indexOf(ym) >= ALL_YMS.length - 1 ? 'disabled' : ''}>${ico('next', 15)}</button></div>` : '';
   const tb = opts.money ? `<div class="toolbar-row"><div class="seg" role="group" aria-label="НДС"><button data-vat="asis" class="${STATE.vat === 'asis' ? 'on' : ''}"><span class="l">Деньги (как есть)</span><span class="s">Как есть</span></button><button data-vat="net" class="${STATE.vat === 'net' ? 'on' : ''}">Без НДС</button></div>
     <div class="seg" role="group" aria-label="Общие расходы"><button data-alloc="1" class="${UI.ALLOC_ON ? 'on' : ''}"><span class="l">С распределением</span><span class="s">С общими</span></button><button data-alloc="0" class="${!UI.ALLOC_ON ? 'on' : ''}"><span class="l">Без распределения</span><span class="s">Без общих</span></button></div></div>` : '';
-  $('#top').innerHTML = `<button class="btn iconbtn burger" id="burger" aria-label="Меню">${ico('menu')}</button><h1>${title}</h1>${monthCtl}<div class="spacer"></div>${tb}${opts.extra || ''}<button class="btn iconbtn" id="theme" aria-label="Сменить тему">${ico('moon')}</button>`;
+  $('#top').innerHTML = `<button class="btn iconbtn burger" id="burger" aria-label="Меню">${ico('menu')}</button><h1>${title}</h1>${monthCtl}<div class="spacer"></div>${tb}${opts.extra || ''}<button class="btn" id="refreshData">Обновить данные</button><button class="btn iconbtn" id="theme" aria-label="Сменить тему">${ico('moon')}</button>`;
+  $('#refreshData').onclick = async () => { try { await refresh(); toast('Данные обновлены с сервера'); } catch(e) { toast(e.message); } };
+  if ($('#selectedMonth')) $('#selectedMonth').onchange = e => { STATE.ym = e.target.value; render(); };
   $$('[data-mo]').forEach(b => b.onclick = () => { const i = ALL_YMS.indexOf(STATE.ym) + Number(b.dataset.mo); if (ALL_YMS[i]) { STATE.ym = ALL_YMS[i]; render(); } });
   $$('[data-vat]').forEach(b => b.onclick = () => { STATE.vat = b.dataset.vat; render(); });
   $$('[data-alloc]').forEach(b => b.onclick = () => { UI.ALLOC_ON = b.dataset.alloc === '1'; render(); });
@@ -356,7 +386,7 @@ PAGES.dashboard = () => {
   const lossP = hasProfit(prev) ? carsWithProfit(prev).filter(k => carProfit(prev, k) < 0).length : null;
   const partial = f && f.basis === 'calc';
   const head = [];
-  if (hasFin(ym) && !histMonth(ym)) head.push(`<div class="note">${ico('info')}<div>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} посчитана по введённым доходам и расходам${kmTotal(ym) ? ' и пробегу' : ''}: ${Object.keys(FIN[ym].cars).length} машин из ${monthCarCount(ym)}. ${carsWithProfit(ym).some(k => V[k] && V[k].amort) ? 'Амортизация — по справочнику машин.' : 'Амортизация в справочнике машин не заполнена — прибыль показана без неё. Впишите её в «Справочнике машин».'}</div></div>`);
+  if (hasFin(ym) && !histMonth(ym)) head.push(`<div class="note">${ico('info')}<div>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} посчитана по введённым доходам и расходам${kmTotal(ym) ? ' и пробегу' : ''}: ${Object.keys(FIN[ym].cars).length} машин из ${monthCarCount(ym)}. ${carsWithProfit(ym).filter(k => V[k]?.amort == null).length ? `Амортизация не заполнена у ${carsWithProfit(ym).filter(k => V[k]?.amort == null).length} машин — по ним она не вычтена. Укажите суммы в «Справочнике машин».` : 'Амортизация — по справочнику машин.'}</div></div>`);
   else if (!hasProfit(ym)) head.push(`<div class="note">${ico('info')}<div><b>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} ещё не внесена.</b> ${f ? `Показаны только дни из графика${partial ? `, посчитанные по ячейкам${f.filled < daysIn(ym) ? ` (заполнено по ${f.filled}-е число)` : ''}: ручных итогов диспетчера за этот месяц нет` : ''}.` : ''}${LAST_PROFIT && LAST_PROFIT !== ym ? ` <button class="btn" data-goym="${LAST_PROFIT}" style="margin-top:8px">Показать ${MONTHS[Number(LAST_PROFIT.slice(5)) - 1]} ${LAST_PROFIT.slice(0, 4)}</button>` : ''}</div></div>`);
   else head.push(`<div class="note">${ico('info')}<div>Прибыль — из таблицы «Прибыль по машинам», дни — ${SCHED[ym] && SCHED[ym].manual ? 'ручные итоги диспетчера' : 'по ячейкам графика'}.${hasFin(ym) ? '' : ' Выручка, статьи расходов и пробег появятся после ввода бухгалтером.'}</div></div>`);
   const REV = revenueOf(ym), REVP = revenueOf(prev), KMT = kmTotal(ym), CPK = costPerKm(ym), CPKP = costPerKm(prev);
@@ -414,29 +444,60 @@ PAGES.dashboard = () => {
     $('#top5').innerHTML = tbl(rows.slice(0, 5));
     $('#bot5').innerHTML = tbl(rows.slice(-5).reverse());
   } else { $('#top5').innerHTML = empty('Нет прибыли за месяц', 'Рейтинг появится после внесения данных.'); $('#bot5').innerHTML = ''; }
+  $('#content').insertAdjacentHTML('beforeend', `<section class="card panel" style="margin-top:14px"><h2>Полный рейтинг всех машин · ${detailKeys(ym).length}</h2><p>Все показатели шаблона; таблица прокручивается по горизонтали. Нажмите машину для подробностей.</p>${detailTable(ym)}${sharedDetail(ym)}</section>`);
   bindCarRows();
   $('#xls').onclick = exportExcel;
 };
 
 function bindCarRows() { $$('[data-car]').forEach(tr => tr.onclick = () => (ROLE === 'input' ? null : go('car/' + encodeURIComponent(tr.dataset.car)))); }
 
+/* Полная детализация: одинаковые показатели на дашборде, в отчёте и Excel. */
+const detailKeys = ym => [...new Set([...(SCHED[ym]?.rows || []).map(r => r.k), ...carsWithProfit(ym), ...Object.keys(KM[ym] || {}), ...Object.keys((D.wdays || {})[ym] || {}), ...Object.keys(INPUT[ym] || {})])];
+const detailRub = n => n == null || !Number.isFinite(n) ? '—' : n.toLocaleString('ru-RU', {minimumFractionDigits:2, maximumFractionDigits:2}) + NB + '₽';
+const DETAIL_COLS = [['rank', 'Место'], ['name', 'Машина'], ['plate', 'Госномер'], ['income', 'Доходы'], ['expense', 'Расходы по статьям'], ['km', 'Пробег, км'], ['days', 'Раб. дней'], ['amort', 'Амортизация'], ['share', 'Общие расходы'], ['raw', 'Прибыль до общих'], ['profit', 'Прибыль с общими'], ...Object.entries(ART_NAMES), ['vat', 'Ставка НДС'], ['gross', 'Суммы с НДС'], ['doc', 'Документ']];
+function detailRows(ym) {
+  const alloc = allocation(ym).cars;
+  return detailKeys(ym).map(k => {
+    const a = finCar(ym, k), e = (INPUT[ym] || {})[k] || {}, v = V[k] || {};
+    return { k, name: name(k), plate: v.plate || '', income: a ? carIncome(ym,k) : null, expense: a ? carExpense(ym,k) : null,
+      km: kmOf(ym,k), days: workedOf(ym,k) ?? null, amort: v.amort ?? null, share: alloc[k] ? -alloc[k].share : null,
+      raw: profitRaw(ym,k), profit: alloc[k]?.alloc ?? null, ...a, vat: e.vat || '', gross: e.gross == null ? '' : e.gross ? 'да' : 'нет', doc: (e.documents || []).join('; ') };
+  }).sort((a,b) => (b.profit ?? -Infinity) - (a.profit ?? -Infinity) || a.name.localeCompare(b.name, 'ru', {numeric:true})).map((r,i) => ({...r, rank:i+1}));
+}
+function detailTable(ym, report = false) {
+  const cols = report ? DETAIL_COLS.slice(0,11) : DETAIL_COLS, rows = detailRows(ym);
+  const strings = ['name','plate','vat','gross','doc'];
+  return `<div class="tbl-wrap full-detail"><table><thead><tr>${cols.map(([,t]) => `<th>${t}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr data-car="${esc(r.k)}">${cols.map(([k]) => `<td>${strings.includes(k) ? esc(r[k] || '—') : ['rank','km','days'].includes(k) ? int(r[k]) : detailRub(r[k])}</td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr>${cols.map(([k],i) => `<td>${i===0?'Итого':i===1?rows.length+' маш.':strings.includes(k)?'':(rows.some(r=>typeof r[k]==='number')?int(rows.reduce((s,r)=>s+(typeof r[k]==='number'?r[k]:0),0)):'—')}</td>`).join('')}</tr></tfoot></table></div>`;
+}
+function articleDetails(row) {
+  const fields = DETAIL_COLS.slice(11), result = [];
+  const cell = ([key, title]) => `<td>${esc(title)}</td><td>${['vat','gross','doc'].includes(key) ? esc(row[key] || '—') : detailRub(row[key])}</td>`;
+  for (let i = 0; i < fields.length; i += 2) {
+    result.push(`<tr>${cell(fields[i])}${fields[i + 1] ? cell(fields[i + 1]) : '<td></td><td></td>'}</tr>`);
+  }
+  return result.join('');
+}
+function sharedDetail(ym) {
+  return `<table><thead><tr><th>Общие расходы парка</th><th>Сумма</th></tr></thead><tbody>${[['gen','Общехоз'],['service','Сервис'],['tractor','Трактор'],['amort','Амортизация парка']].map(([k,t])=>`<tr><td>${t}</td><td>${rub(-sharedOf(ym,k))}</td></tr>`).join('')}</tbody></table>`;
+}
+
 /* ---------- Машины ---------- */
 const CARS_UI = UI.CARS_UI;
 PAGES.cars = () => {
   const ym = STATE.ym;
   topbar('Машины', { month: true, money: true, extra: `<button class="btn hide-m" id="xls">${ico('xls', 15)}Excel</button>` });
-  const keys = [...new Set([...(SCHED[ym] ? SCHED[ym].rows.map(r => r.k) : []), ...carsWithProfit(ym)])];
+  const keys = detailKeys(ym);
   const rows = keys.map(k => {
     const v = V[k] || {}, d = daysOf(ym, k);
     const p = carProfit(ym, k);
     const ytd = YEAR_YMS().filter(y => y <= ym).map(y => carProfit(y, k)).filter(x => x != null);
-    const ytdW = YEAR_YMS().filter(y => y <= ym).reduce((s, y) => s + (profitRaw(y, k) != null ? ((daysOf(y, k) || {}).worked || 0) : 0), 0);
+    const ytdW = YEAR_YMS().filter(y => y <= ym).reduce((s, y) => s + (profitRaw(y, k) != null ? (workedOf(y, k) || 0) : 0), 0);
     const ytdP = ytd.reduce((a, b) => a + b, 0);
-    return { k, n: v.name || k, plate: v.plate || '', model: v.model || '', make: v.make || '', year: v.year, p, w: d ? d.worked : null, ki: carKi(ym, k), nd: d ? d.no_driver : null, rep: d ? d.unplanned : null,
+    return { k, n: v.name || k, plate: v.plate || '', model: v.model || '', make: v.make || '', year: v.year, p, income: finCar(ym,k) ? carIncome(ym,k) : null, expense: finCar(ym,k) ? carExpense(ym,k) : null, km: kmOf(ym,k), w: d ? d.worked : null, ki: carKi(ym, k), nd: d ? d.no_driver : null, rep: d ? d.unplanned : null,
       ppd: p != null && d && d.worked ? p / d.worked : null, ytd: ytd.length ? ytdP : null, ytdPpd: ytdW ? ytdP / ytdW : null, s: YEAR_YMS().map(y => carProfit(y, k)) };
   });
   const makes = ['all', ...[...new Set(rows.map(r => r.make).filter(Boolean))].sort()];
-  const cols = [['n', 'Машина', 'l'], ['year', 'Год'], ['p', 'Прибыль'], ['w', 'Раб. дней'], ['ppd', 'На раб. день'], ['ki', 'КИ'], ['nd', 'Без водит.', 'col-m'], ['rep', 'Ремонт, дн.', 'col-m'], ['ytdPpd', 'На раб. день, год', 'col-m'], ['s', 'Прибыль за год', 'nos']];
+  const cols = [['n', 'Машина', 'l'], ['year', 'Год'], ['p', 'Прибыль'], ['income', 'Доходы'], ['expense', 'Расходы'], ['km', 'Пробег, км'], ['w', 'Раб. дней'], ['ppd', 'На раб. день'], ['ki', 'КИ'], ['nd', 'Без водит.', 'col-m'], ['rep', 'Ремонт, дн.', 'col-m'], ['ytdPpd', 'На раб. день, год', 'col-m'], ['s', 'Прибыль за год', 'nos']];
   function draw() {
     const q = CARS_UI.q.trim().toLowerCase();
     let list = rows.filter(r => (CARS_UI.make === 'all' || r.make === CARS_UI.make) && (!CARS_UI.loss || (r.p != null && r.p < 0)) &&
@@ -446,9 +507,9 @@ PAGES.cars = () => {
     const tot = list.reduce((s, r) => s + (r.p || 0), 0), totW = list.reduce((s, r) => s + (r.w || 0), 0);
     $('#carsTable').innerHTML = list.length ? `<table><thead><tr>${cols.map(([k, t, c]) => `<th class="${c === 'nos' ? '' : 'sort'} ${c || ''} ${sk === k ? 'sorted' : ''}" data-sort="${c === 'nos' ? '' : k}">${t}${sk === k ? `<span class="arr">${CARS_UI.dir < 0 ? '↓' : '↑'}</span>` : ''}</th>`).join('')}</tr></thead>
       <tbody>${list.map(r => `<tr class="click ${r.p != null && r.p < 0 ? 'lossrow' : ''}" data-car="${r.k}"><td><span class="car">${r.n}</span> <span class="plate">${esc(r.plate)}</span><div class="plate">${esc(r.model)}</div></td>
-        <td>${r.year ?? '—'}</td><td class="${r.p < 0 ? 'neg-ink' : ''}">${rub(r.p)}</td><td>${r.w ?? '—'}</td><td class="${r.ppd < 0 ? 'neg-ink' : ''}">${r.ppd == null ? '—' : rub(r.ppd)}</td><td>${pct(r.ki, 0)}</td>
+        <td>${r.year ?? '—'}</td><td class="${r.p < 0 ? 'neg-ink' : ''}">${rub(r.p)}</td><td>${rub(r.income)}</td><td>${rub(r.expense)}</td><td>${int(r.km)}</td><td>${r.w ?? '—'}</td><td class="${r.ppd < 0 ? 'neg-ink' : ''}">${r.ppd == null ? '—' : rub(r.ppd)}</td><td>${pct(r.ki, 0)}</td>
         <td class="col-m">${r.nd ?? '—'}</td><td class="col-m">${r.rep ?? '—'}</td><td class="col-m ${r.ytdPpd < 0 ? 'neg-ink' : ''}">${r.ytdPpd == null ? '—' : rub(r.ytdPpd)}</td><td>${spark(r.s)}</td></tr>`).join('')}</tbody>
-      <tfoot><tr><td>Итого: ${list.length} маш.</td><td></td><td class="${tot < 0 ? 'neg-ink' : ''}">${rub(tot)}</td><td>${totW}</td><td>${totW ? rub(tot / totW) : '—'}</td><td></td><td class="col-m"></td><td class="col-m"></td><td class="col-m"></td><td></td></tr></tfoot></table>`
+      <tfoot><tr><td>Итого: ${list.length} маш.</td><td></td><td class="${tot < 0 ? 'neg-ink' : ''}">${rub(tot)}</td><td>${rub(list.reduce((s,r)=>s+(r.income||0),0))}</td><td>${rub(list.reduce((s,r)=>s+(r.expense||0),0))}</td><td>${int(list.reduce((s,r)=>s+(r.km||0),0))}</td><td>${totW}</td><td>${totW ? rub(tot / totW) : '—'}</td><td></td><td class="col-m"></td><td class="col-m"></td><td class="col-m"></td><td></td></tr></tfoot></table>`
       : empty('Ничего не найдено', 'Попробуйте изменить поиск или сбросить фильтры.', 'search');
     $$('th[data-sort]').forEach(th => th.dataset.sort && (th.onclick = () => { if (CARS_UI.sort === th.dataset.sort) CARS_UI.dir *= -1; else { CARS_UI.sort = th.dataset.sort; CARS_UI.dir = th.dataset.sort === 'n' ? 1 : -1; } draw(); }));
     bindCarRows();
@@ -457,7 +518,7 @@ PAGES.cars = () => {
     ${makes.map(m => `<button class="pill ${CARS_UI.make === m ? 'on' : ''}" data-make="${m}">${m === 'all' ? 'Все марки' : m}</button>`).join('')}
     <button class="pill ${CARS_UI.loss ? 'on' : ''}" id="lossf">Только убыточные</button></div>
     ${!hasProfit(ym) ? `<div class="note">${ico('info')}<div>Прибыль за ${MONTHS[Number(ym.slice(5)) - 1]} не внесена — в таблице только дни из графика.</div></div>` : ''}
-    <div class="card"><div class="tbl-wrap" id="carsTable"></div></div>`;
+    <div class="card"><div class="tbl-wrap" id="carsTable"></div></div><section class="card panel" style="margin-top:14px"><h2>Все показатели Excel</h2>${detailTable(ym)}${sharedDetail(ym)}</section>`;
   $('#q').oninput = e => { CARS_UI.q = e.target.value; draw(); };
   $$('[data-make]').forEach(b => b.onclick = () => { CARS_UI.make = b.dataset.make; $$('[data-make]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
   $('#lossf').onclick = e => { CARS_UI.loss = !CARS_UI.loss; e.target.classList.toggle('on', CARS_UI.loss); draw(); };
@@ -473,20 +534,20 @@ PAGES.car = (k) => {
   topbar(`Машина ${v.name}`, { month: true, money: true, extra: `<a class="btn hide-m" href="#/cars">← Все машины</a>` });
   const ytd = YEAR_YMS().map(y => carProfit(y, k));
   const ytdSum = ytd.reduce((s, x) => s + (x || 0), 0);
-  const wYtd = YEAR_YMS().reduce((s, y) => s + ((daysOf(y, k) || {}).worked || 0), 0);
-  const calYtd = YEAR_YMS().reduce((s, y) => s + (rowOf(y, k) ? daysIn(y) : 0), 0);
+  const wYtd = YEAR_YMS().reduce((s, y) => s + (workedOf(y, k) || 0), 0);
+  const calYtd = YEAR_YMS().reduce((s, y) => s + (daysOf(y, k) ? daysIn(y) : 0), 0);
   const p = carProfit(ym, k), d = daysOf(ym, k);
   const r = rowOf(ym, k);
   const fuel = Object.keys(D.fuel_month).sort().map(y => [y, (D.fuel_month[y] || {})[k]]).filter(x => x[1]);
   const passport = [['Госномер', v.plate || '<span class="neg-ink">нет в «АВТО»</span>'], ['Модель', v.model || '—'], ['Год выпуска', v.year || '—'], ['Тахограф', v.tacho || '—'],
     ['Прицеп', v.trailer ? `${esc(v.trailer)} · ${esc(v.trailer_model || '')}${v.trailer_year ? ', ' + v.trailer_year : ''}` : '—'], ['Пробег по одометру', v.odo ? int(v.odo) + NB + 'км' + (v.odo > 5e6 ? ' <span class="chip warn">похоже на опечатку</span>' : '') : '—'],
-    ['Амортизация в месяц', v.amort ? rub(v.amort) : '—']];
+    ['Амортизация в месяц', v.amort != null ? rub(v.amort) : 'Не заполнена — укажите в справочнике']];
   $('#content').innerHTML = `${vatNote()}
     <section class="kpis k5">
       <article class="card kpi fade"><div class="lbl">Прибыль, ${ymLabel(ym).toLowerCase()}</div><div class="val ${p < 0 ? 'neg-ink' : ''}">${rub(p)}</div><div class="delta">${deltaChip(p, carProfit(prevYm(ym), k))} ${UI.ALLOC_ON ? 'с общими' : 'до общих'}</div></article>
       <article class="card kpi fade"><div class="lbl">Прибыль с начала ${REP_YEAR()}</div><div class="val ${ytdSum < 0 ? 'neg-ink' : ''}">${rub(ytdSum)}</div><div class="delta">${YEAR_YMS().length} мес.</div></article>
       <article class="card kpi fade"><div class="lbl">Прибыль в рабочий день, ${REP_YEAR()}</div><div class="val ${ytdSum < 0 ? 'neg-ink' : ''}">${wYtd ? rub(ytdSum / wYtd) : '—'}</div><div class="delta">${wYtd} раб. дней</div></article>
-      <article class="card kpi fade"><div class="lbl">КИ, ${ymLabel(ym).toLowerCase()}</div><div class="val">${pct(carKi(ym, k))}</div><div class="delta">${d ? `${d.worked} раб. из ${SCHED[ym].manual ? daysIn(ym) : filledDays(ym)}` : 'нет в графике'}</div></article>
+      <article class="card kpi fade"><div class="lbl">КИ, ${ymLabel(ym).toLowerCase()}</div><div class="val">${pct(carKi(ym, k))}</div><div class="delta">${d ? `${d.worked} раб. из ${!SCHED[ym] || SCHED[ym].manual || ((D.wdays || {})[ym] || {})[k] != null ? daysIn(ym) : filledDays(ym)}` : 'нет в графике'}</div></article>
       <article class="card kpi fade"><div class="lbl">КИ с начала ${REP_YEAR()}</div><div class="val">${calYtd ? pct(wYtd / calYtd * 100) : '—'}</div><div class="delta">${wYtd} из ${calYtd} дн.</div></article>
     </section>
     <section class="g21" style="margin-top:14px">
@@ -503,6 +564,7 @@ PAGES.car = (k) => {
         <div class="card panel"><div class="panel-h"><div><h2>Топливо</h2><p>литры по топливной карте и ГЛОНАСС</p></div></div>${fuel.length ? '<div id="cf" class="chart" style="height:200px"></div>' : empty('Нет данных о заправках', 'По этой машине в «Анализе заправок» нет записей.', 'fuel')}</div>
       </div>
     </section>`;
+  $('#content').insertAdjacentHTML('beforeend', `<section class="card panel" style="margin-top:14px"><h2>Все показатели за ${ymLabel(ym)}</h2><table><tbody>${DETAIL_COLS.slice(3).map(([a,t]) => { const x=detailRows(ym).find(r=>r.k===k)||{}; return `<tr><td>${esc(t)}</td><td>${['vat','gross','doc'].includes(a)?esc(x[a]||'—'):['km','days'].includes(a)?int(x[a]):detailRub(x[a])}</td></tr>`; }).join('')}</tbody></table></section>`);
   if ($('#cx')) {
     const items = Object.entries(finCar(ym, k)).filter(([a, v]) => !INCOME_ARTS.includes(a) && v).sort((a, b) => b[1] - a[1]);
     const tot = items.reduce((t, [, v]) => t + v, 0);
@@ -741,14 +803,12 @@ PAGES.recon = () => {
 
 /* ---------- Отчёт для руководителя (A4) ---------- */
 PAGES.report = () => {
-  if (!hasProfit(STATE.ym) && LAST_PROFIT) STATE.ym = LAST_PROFIT;
-  if (!hasProfit(STATE.ym)) { topbar('Отчёт для руководителя'); $('#content').innerHTML = empty('Отчёт пока не из чего собрать', 'Отчёт появится, когда за месяц будут доходы и расходы: загрузите шаблон месяца на экране «Загрузка и ввод».', 'report'); return; }
+  if (!hasProfit(STATE.ym)) { topbar('Отчёт для руководителя', {month:true}); $('#content').innerHTML = empty('Отчёт пока не из чего собрать', 'Отчёт появится, когда за месяц будут доходы и расходы: загрузите шаблон месяца на экране «Загрузка и ввод».', 'report'); return; }
   const ym = STATE.ym, prev = prevYm(ym);
-  topbar('Отчёт для руководителя', { month: true, extra: `<button class="btn primary" id="print">${ico('pdf', 15)}Печать / PDF</button><button class="btn hide-m" id="xls">${ico('xls', 15)}Excel</button>` });
-  const f = fleetDays(ym), P = fleetTotal(ym), PP = hasProfit(prev) ? fleetTotal(prev) : null;
+  topbar('Отчёт для руководителя', { month: true, money: true, extra: `<button class="btn primary" id="print">${ico('pdf', 15)}Печать / PDF</button><button class="btn hide-m" id="xls">${ico('xls', 15)}Excel</button>` });
+  const f = fleetDays(ym) || {worked:0,cal:0,no_driver:0,unplanned:0,idle:0,planned:0}, P = fleetTotal(ym), PP = hasProfit(prev) ? fleetTotal(prev) : null;
   const rows = carsWithProfit(ym).map(k => ({ k, p: allocation(ym).cars[k].alloc, raw: profitRaw(ym, k), d: workedOf(ym, k) })).sort((a, b) => b.raw - a.raw);
   const loss = rows.filter(r => r.raw < 0).length;
-  const t = list => `<table><thead><tr><th>Машина</th><th>Прибыль</th><th>Раб. дн.</th><th>На раб. день</th></tr></thead><tbody>${list.map(r => `<tr><td><b>${name(r.k)}</b></td><td class="${r.raw < 0 ? 'neg-ink' : ''}">${rub(r.raw)}</td><td>${r.d ?? '—'}</td><td class="${r.raw < 0 ? 'neg-ink' : ''}">${r.d ? rub(r.raw / r.d) : '—'}</td></tr>`).join('')}</tbody></table>`;
   const kNow = ki(ym), kPrev = ki(prev);
   const best = rows[0], worst = rows[rows.length - 1];
   $('#content').innerHTML = `<div class="a4" id="a4">
@@ -761,10 +821,10 @@ PAGES.report = () => {
       <div><small>КИ парка</small><b>${pct(kNow)}</b><span>${kPrev != null ? (kNow - kPrev < 0 ? MINUS : '+') + dec(Math.abs(kNow - kPrev)) + ' п.п.' : ''} · ${f.worked} из ${f.cal} маш.-дн.</span></div>
       <div><small>Машин в убытке</small><b>${loss} из ${rows.length}</b><span>до распределения общих</span></div>
     </div>
-    <div class="concl"><b>Коротко.</b> Прибыль парка ${rub(P)}${PP != null ? `, ${P >= PP ? 'больше' : 'меньше'} прошлого месяца на ${rub(Math.abs(P - PP))}` : ''}. Лучшая машина — ${name(best.k)} (${rub(best.raw)}), худшая — ${name(worst.k)} (${rub(worst.raw)}). Без водителя потеряно ${f.no_driver} машино-дней, во внеплановом ремонте — ${f.unplanned}.</div>
+    <div class="concl"><b>Коротко.</b> Прибыль парка ${rub(P)}${PP != null ? `, ${P >= PP ? 'больше' : 'меньше'} прошлого месяца на ${rub(Math.abs(P - PP))}` : ''}. Лучшая машина — ${best ? name(best.k) : '—'} (${rub(best?.raw)}), худшая — ${worst ? name(worst.k) : '—'} (${rub(worst?.raw)}). ${f.basis === 'template' ? 'Рабочие дни — из шаблона. Причины нерабочих дней в шаблоне не указаны.' : `Без водителя потеряно ${f.no_driver} машино-дней, во внеплановом ремонте — ${f.unplanned}.`}</div>
     <div class="two"><div><h3>От прибыли машин к прибыли парка</h3><div id="rw" class="chart"></div></div><div><h3>Машино-дни по статусам</h3>${daysBlock(f)}<div id="rp" class="chart" style="height:44mm"></div></div></div>
-    <div class="two"><div><h3>Топ-5</h3>${t(rows.slice(0, 5))}</div><div><h3>Анти-топ-5</h3>${t(rows.slice(-5).reverse())}</div></div>
-    <div class="rf"><span>FiberTrack · отчёт о рентабельности парка</span><span>Прибыль до распределения — из таблицы «Прибыль по машинам»; дни — график работы</span></div>
+    <section class="report-ranking"><h3>Полный рейтинг · ${detailKeys(ym).length} машин</h3>${detailTable(ym,true)}${sharedDetail(ym)}</section><section class="report-articles"><h3>Доходы и расходы по каждой статье</h3>${detailRows(ym).map(r=>`<div class="report-car"><h3>${esc(r.name)} · ${esc(r.plate)}</h3><table><tbody>${articleDetails(r)}</tbody></table></div>`).join('')}</section>
+    <div class="rf"><span>FiberTrack · отчёт о рентабельности парка</span><span>Источники: серверная база, шаблон месяца и график; «—» означает отсутствие данных</span></div>
   </div>`;
   // в отчёте всегда светлая палитра
   const root = document.documentElement, saved = root.dataset.theme; root.dataset.theme = 'light';
@@ -928,7 +988,7 @@ function openEntry(ym, k) {
     <div class="form">${f('km', 'Пробег, км', x.km, 'min="0" inputmode="numeric"')}${f('days', 'Отработано дней', x.days, `min="0" max="${nd}" inputmode="numeric"`)}
       <label>Ставка НДС<select class="inp" id="in-vat">${['22%', '10%', '7%', '5%', '0%', 'без НДС'].map(v => `<option ${(x.vat || '22%') === v ? 'selected' : ''}>${v}</option>`).join('')}</select><span class="err" id="in-vat-e"></span></label>
       <label style="display:flex;gap:8px;align-items:center;flex-direction:row;margin-top:22px"><input type="checkbox" id="in-gross" ${x.gross !== false ? 'checked' : ''}> Суммы указаны с НДС</label>
-      <div class="full upl-sub">Доходы</div>${ARTICLES.filter(([c]) => INCOME.includes(c)).map(([c, t]) => f(c, t, a[c])).join('')}
+      <label class="full">Документ<input id="in-document" maxlength="128" value="${esc((x.documents || []).join('; '))}"></label><div class="full upl-sub">Доходы</div>${ARTICLES.filter(([c]) => INCOME.includes(c)).map(([c, t]) => f(c, t, a[c])).join('')}
       <div class="full upl-sub">Расходы</div>${ARTICLES.filter(([c]) => !INCOME.includes(c)).map(([c, t]) => f(c, t, a[c])).join('')}</div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px;position:sticky;bottom:-22px;background:var(--surface);padding:12px 0"><button class="btn" id="mc">Отмена</button><button class="btn primary" id="ms">Сохранить</button></div></div>`;
   $('#modal').classList.add('open');
@@ -938,7 +998,7 @@ function openEntry(ym, k) {
   $('#ms').onclick = () => {
     const num = id => { const v = $('#in-' + id).value.trim().replace(',', '.'); return v === '' ? null : Number(v); };
     const amounts = {}; ARTICLES.forEach(([c]) => { const v = num(c); if (v != null) amounts[c] = v; });
-    const data = { km: num('km'), days: num('days'), vat: $('#in-vat').value, gross: $('#in-gross').checked, amounts };
+    const data = { km: num('km'), days: num('days'), vat: $('#in-vat').value, gross: $('#in-gross').checked, document: $('#in-document').value.trim() || null, amounts };
     let ok = true; $$('.err', $('#modal')).forEach(e => e.textContent = '');
     const err = (id, t) => { $('#in-' + id + '-e').textContent = t; ok = false; };
     if (data.km != null && (!Number.isInteger(data.km) || data.km < S.kmMin || data.km > S.kmMax)) err('km', `Пробег — целое число от ${int(S.kmMin)} до ${int(S.kmMax)} км`);
@@ -1019,7 +1079,7 @@ PAGES.fleet = () => {
     $('#fleetTable').innerHTML = list.length ? `<table><thead><tr><th>Машина</th><th class="l">Госномер</th><th class="l">Модель</th><th>Год</th><th class="l col-m">Прицеп</th><th class="col-m">Амортизация</th><th class="l">Статус</th>${canEdit ? '<th></th>' : ''}</tr></thead><tbody>
       ${list.map(k => { const v = V[k]; const act = isActive(k, v); return `<tr class="${canEdit ? 'click' : ''}" data-fk="${esc(k)}"><td><span class="car">${esc(v.name)}</span>${v.edited ? ' <span class="chip" title="Изменено в программе">изм.</span>' : ''}</td>
         <td class="l">${v.plate ? esc(v.plate) : '<span class="chip warn">нет госномера</span>'}</td><td class="l">${esc(v.model || '—')}</td><td>${v.year || '—'}</td>
-        <td class="l col-m">${v.trailer ? esc(v.trailer) + `<div class="plate">${esc(v.trailer_model || '')}</div>` : '—'}</td><td class="col-m">${v.amort ? rub(v.amort) : '—'}</td>
+        <td class="l col-m">${v.trailer ? esc(v.trailer) + `<div class="plate">${esc(v.trailer_model || '')}</div>` : '—'}</td><td class="col-m">${v.amort != null ? rub(v.amort) : '<span class="chip warn">Не заполнена</span>'}</td>
         <td class="l"><span class="status-dot" style="background:${act ? 'var(--st-T)' : 'var(--border-strong)'}"></span>${act ? 'в работе' : 'выведена' + (v.to ? ' с ' + esc(v.to) : '')}</td>${canEdit ? '<td><button class="btn">Изменить</button></td>' : ''}</tr>`; }).join('')}</tbody></table>`
       : empty('Ничего не найдено', 'Измените поиск или фильтр.', 'search');
     if (canEdit) $$('[data-fk]').forEach(tr => tr.onclick = () => editCar(tr.dataset.fk));
@@ -1107,6 +1167,7 @@ PAGES.settings = () => {
     <div class="card panel"><div class="panel-h"><div><h2>Пользователи</h2></div></div><table><tbody>
       <tr><td>Владелец</td><td class="l muted">все разделы, месяцы, настройки</td></tr><tr><td>Руководитель</td><td class="l muted">дашборды, отчёты, печать, Excel</td></tr><tr><td>Бухгалтер</td><td class="l muted">справочник машин, ввод за открытые месяцы, «Проверить»; прибыль и отчёты не видит</td></tr></tbody></table></div>
   </div><div style="margin-top:14px;display:flex;gap:8px"><button class="btn primary" id="save">Сохранить</button><button class="btn" id="reset">Сбросить</button></div>`;
+  $('#content').insertAdjacentHTML('beforeend', `<section class="card panel" style="margin-top:14px"><h2>Полное резервное копирование</h2><p>Вся база, пользователи, настройки, журнал, загруженные Excel и код программы. В архиве есть инструкция восстановления. Конфигурацию сервера .env сохраните отдельно.</p><a class="btn primary" href="/api/backup" id="downloadBackup">Скачать полный резервный архив ZIP</a></section>`);
   $('#save').onclick = () => {
     S.alloc = ($('input[name=alloc]:checked') || {}).value || 'days';
     S.groups = $$('[data-g]').map(i => Number(i.value)).sort((a, b) => a - b);
@@ -1128,7 +1189,7 @@ function sheetXml(sh) {
       const ref = colName(ci) + (ri + 1);
       const sAttr = st ? ` s="${XSTYLE[st]}"` : (typeof v === 'number' ? ' s="2"' : '');
       if (v == null || v === '') return st ? `<c r="${ref}"${sAttr}/>` : '';
-      if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${Math.round(v)}</v></c>`;
+      if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${Number.isFinite(v) ? Math.round(v * 100) / 100 : 0}</v></c>`;
       return `<c r="${ref}"${sAttr} t="inlineStr"><is><t xml:space="preserve">${xesc(v)}</t></is></c>`;
     }).join('');
     return `<row r="${ri + 1}">${cells}</row>`;
@@ -1144,7 +1205,7 @@ function workbook(sheets) {
     '_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
     'xl/workbook.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((n, i) => `<sheet name="${n}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`,
     'xl/_rels/workbook.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
-    'xl/styles.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0;[Red]\-#,##0"/></numFmts>
+    'xl/styles.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00;[Red]\-#,##0.00"/></numFmts>
 <fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="13"/><name val="Calibri"/></font></fonts>
 <fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0B1F3A"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF3CC"/></patternFill></fill></fills>
 <borders count="2"><border/><border><left style="thin"><color rgb="FFD6D9DF"/></left><right style="thin"><color rgb="FFD6D9DF"/></right><top style="thin"><color rgb="FFD6D9DF"/></top><bottom style="thin"><color rgb="FFD6D9DF"/></bottom></border></borders>
@@ -1176,13 +1237,14 @@ function download(name, blob) { const a = document.createElement('a'); a.href = 
 function exportExcel() {
   const YEAR = REP_YEAR(), months = PROFIT_MONTHS.filter(y => y.startsWith(YEAR));
   const head = ['Машина', 'Амортизация', ...months.map(y => cap(MONTHS[Number(y.slice(5)) - 1])), 'Итого за год', 'Раб. дней', 'Прибыль в раб. день'];
-  const keys = Object.keys(D.profit).sort((a, b) => name(a).localeCompare(name(b), 'ru', { numeric: true }));
-  const rows = keys.map(k => { const ps = months.map(y => profitRaw(y, k)); const tot = ps.reduce((s, x) => s + (x || 0), 0); const w = months.reduce((s, y) => s + (profitRaw(y, k) != null ? ((daysOf(y, k) || {}).worked || 0) : 0), 0);
+  const keys = [...new Set(months.flatMap(detailKeys))].sort((a, b) => name(a).localeCompare(name(b), 'ru', { numeric: true }));
+  const rows = keys.map(k => { const ps = months.map(y => profitRaw(y, k)); const tot = ps.reduce((s, x) => s + (x || 0), 0); const w = months.reduce((s, y) => s + (profitRaw(y, k) != null ? (workedOf(y, k) || 0) : 0), 0);
     return [[name(k), 'b'], (V[k] || {}).amort ?? null, ...ps.map(x => x ?? null), [tot, 'b'], w, w ? tot / w : null]; });
-  const sh = f => months.map(y => (D.shared[f] || [])[pIdx(y)] ?? null);
+  const sh = f => months.map(y => f === 'total' ? fleetTotal(y) : sharedOf(y,f));
   const sum = arr => arr.reduce((s, x) => s + (x || 0), 0);
   const extra = [['трактор', 'tractor'], ['общехоз', 'gen'], ['сервис', 'service'], ['амортизация', 'amort'], ['Общий', 'total']].map(([n, f]) => [[n, 'b'], null, ...sh(f).map(v => v == null ? null : [v, f === 'total' ? 'b' : 'n']), [sum(sh(f)), 'b'], null, null]);
-  const xlsx = workbook([{ name: YEAR, freeze: true, widths: [70, 80, ...months.map(() => 78), 90, 60, 90], rows: [[[`FiberTrack · прибыль по машинам, ${YEAR} (до распределения общих расходов)`, 't']], head.map(h => [h, 'h']), ...rows, [], ...extra] }]);
+  const monthly = detailRows(STATE.ym);
+  const xlsx = workbook([{name: 'Все показатели месяца', freeze: true, widths: DETAIL_COLS.map(()=>110), rows: [[[`FiberTrack · ${ymLabel(STATE.ym)} · ${NET()?'без НДС':'как внесено'}`, 't']], DETAIL_COLS.map(([,t])=>[t,'h']), ...monthly.map(r=>DETAIL_COLS.map(([k])=>r[k]??null))]}, {name:'Общие расходы', rows: [[['Статья','h'],['Сумма','h']], ...[['gen','Общехоз'],['service','Сервис'],['tractor','Трактор'],['amort','Амортизация']].map(([k,t])=>[t,-sharedOf(STATE.ym,k)])]}, { name: YEAR, freeze: true, widths: [70, 80, ...months.map(() => 78), 90, 60, 90], rows: [[[`FiberTrack · прибыль по машинам, ${YEAR} (до распределения общих расходов)`, 't']], head.map(h => [h, 'h']), ...rows, [], ...extra] }]);
   download(`FiberTrack_прибыль_${YEAR}.xlsx`, xlsx);
   toast('Файл Excel сформирован');
 }
@@ -1205,7 +1267,7 @@ function render() {
   try { localStorage.setItem('ft-ym', STATE.ym); } catch (e) {}
   window.scrollTo({ top: 0 });
 }
-return { render, resize: () => charts.forEach(c => c.resize()) };
+return { render, dispose: () => charts.splice(0).forEach(c => c.dispose()), resize: () => charts.forEach(c => c.resize()) };
 }
 
 let rt;

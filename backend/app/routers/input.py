@@ -1,7 +1,7 @@
 """Ручной ввод по машине за открытый месяц. Сохранение заменяет прежние данные машины за месяц
 (и введённые вручную, и пришедшие из шаблона) — двойного счёта не бывает."""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ class EntryIn(BaseModel):
     amounts: dict[str, float | None] = {}
     vat: str = '22%'
     gross: bool = True
+    document: str | None = Field(default=None, max_length=128)
 
 
 @router.put('/{ym}/{key}')
@@ -60,7 +61,7 @@ def save(ym: str, key: str, e: EntryIn, user: User = Depends(require_roles('admi
     for article, val in amounts.items():
         g, n, vat = split_vat(int(round(val * 100)), rate, e.gross)
         db.add(Operation(ym=ym, vehicle_id=v.id, article=article, amount_gross_kop=g, amount_net_kop=n, vat_kop=vat,
-                         vat_rate=e.vat, vat_mode='gross' if e.gross else 'net', source='manual', entered_by=user.id))
+                         vat_rate=e.vat, vat_mode='gross' if e.gross else 'net', source='manual', document=e.document, entered_by=user.id))
     log(db, user, 'input', v.name, f'Ввод за {month_label(ym).lower()}', None, 'сохранено')
     db.commit()
     return {'ok': True}

@@ -64,6 +64,9 @@ def input_entries(db: Session, keys: dict[int, str], yms: list[str]) -> dict:
     for o in db.scalars(select(Operation).where(Operation.ym.in_(yms), Operation.source.in_(('manual', 'template')), Operation.vehicle_id.is_not(None))):
         e = out[o.ym].setdefault(keys[o.vehicle_id], {'amounts': {}})
         e['amounts'][o.article] = (o.amount_gross_kop if o.vat_mode == 'gross' else o.amount_net_kop) / 100
+        e.setdefault('documents', [])
+        if o.document and o.document not in e['documents']:
+            e['documents'].append(o.document)
         e['vat'], e['gross'], e['source'] = o.vat_rate, o.vat_mode == 'gross', o.source
     return out
 

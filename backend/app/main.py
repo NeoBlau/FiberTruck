@@ -8,10 +8,10 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
-from .routers import auth, data, input, periods, review, uploads, vehicles
+from .routers import auth, backups, data, input, periods, review, uploads, vehicles
 
 app = FastAPI(title='FiberTrack', docs_url=None, redoc_url=None, openapi_url=None)
-for r in (auth.router, data.router, vehicles.router, periods.router, input.router, review.router, uploads.router):
+for r in (backups.router, auth.router, data.router, vehicles.router, periods.router, input.router, review.router, uploads.router):
     app.include_router(r)
 
 

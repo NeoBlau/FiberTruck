@@ -271,6 +271,102 @@ def formula_value(text: str, ws, depth: int = 0):
         return None
 
 
+def build_fuel_template(db: Session, ym: str, keys: list[str]) -> openpyxl.Workbook:
+    """Daily liters in a simple six-column workbook, compatible with upload preview."""
+    from openpyxl.styles import Font, PatternFill
+    from openpyxl.worksheet.datavalidation import DataValidation
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Анализ ЗАПРАВОК'
+    ws.append([f'FiberTrack · топливо · {ym_label(ym)} · только литры, не рубли и не цена за литр'])
+    ws.append(['Дата', 'Машина', 'Госномер', 'РН, л', 'Е100, л', 'ГЛОНАСС, л'])
+    vehicles = {v.key: v for v in db.scalars(select(Vehicle))}
+    y, m = map(int, ym.split('-'))
+    for key in keys:
+        v = vehicles[key]
+        for day in range(1, days_in(ym) + 1):
+            ws.append([dt.date(y, m, day), v.name, v.plate])
+    ws.freeze_panes = 'D3'
+    ws.auto_filter.ref = f'A2:F{ws.max_row}'
+    for row in ws.iter_rows(min_row=3, max_col=6):
+        row[0].number_format = 'DD.MM.YYYY'
+        for cell in row[3:]:
+            cell.fill = PatternFill('solid', fgColor='FFF3CC')
+            cell.number_format = '0.000'
+    for cell in ws[2]:
+        cell.font = Font(bold=True, color='FFFFFF')
+        cell.fill = PatternFill('solid', fgColor='0B1F3A')
+    for col, width in [('A', 16), ('B', 14), ('C', 18), ('D', 18), ('E', 18), ('F', 18)]:
+        ws.column_dimensions[col].width = width
+    valid = DataValidation(type='decimal', operator='greaterThanOrEqual', formula1=0, allow_blank=True)
+    valid.showErrorMessage = True
+    valid.error = 'Введите количество литров не меньше нуля.'
+    ws.add_data_validation(valid)
+    valid.add(f'D3:F{max(3, ws.max_row)}')
+    meta = wb.create_sheet('_ft_fuel')
+    meta.append(['fibertrack-fuel-template'])
+    meta.append([ym])
+    meta.sheet_state = 'hidden'
+    help_ = wb.create_sheet('Инструкция')
+    for text in [
+        'Заполняйте литры по дням и машинам. Дата, номер и госномер уже указаны.',
+        'РН и Е100 — заправки по картам; ГЛОНАСС — литры по данным системы за этот день.',
+        'Не вводите рубли или цену за литр. Расходы в рублях — в обычном шаблоне месяца.',
+        'Если за день было несколько заправок, укажите их сумму в соответствующей колонке.',
+        'Полностью пустые строки литров не меняют данные. Заполненная строка заменяет все три значения машины за этот день.',
+        'В заполненной строке пустые колонки означают отсутствие данных (сохраняются как 0). Для явного нуля впишите 0.',
+        'Загрузите файл в «Загрузка и ввод», проверьте предпросмотр и нажмите «Применить».',
+        'Месяц должен быть открыт. Другие машины, дни, месяцы и финансовые показатели не меняются.',
+    ]:
+        help_.append([text])
+    help_.column_dimensions['A'].width = 125
+    return wb
+
+
+def parse_fuel_template(ctx: Ctx, wb):
+    ym = str(wb['_ft_fuel']['A2'].value or '')
+    if not re.fullmatch(r'20\d\d-(0[1-9]|1[0-2])', ym):
+        raise UploadError('В топливном шаблоне не указан месяц. Скачайте шаблон заново.')
+    ws = wb['Анализ ЗАПРАВОК']
+    if [ws.cell(2, c).value for c in range(1, 7)] != ['Дата', 'Машина', 'Госномер', 'РН, л', 'Е100, л', 'ГЛОНАСС, л']:
+        raise UploadError('Не меняйте заголовки топливного шаблона. Скачайте его заново.')
+    daily = defaultdict(dict)
+    for rownum, row_ in enumerate(ws.iter_rows(min_row=3, max_col=6, values_only=True), 3):
+        date, car, plate, *values = row_
+        if all(v is None or str(v).strip() == '' for v in values):
+            continue
+        v = ctx.find_vehicle(car) or ctx.find_vehicle(plate)
+        if v is None:
+            raise UploadError(f'Строка {rownum}: машина не найдена в справочнике.')
+        if plate and v.plate and str(plate).replace(' ', '').upper().translate(str.maketrans('ABEKMHOPCTYX', 'АВЕКМНОРСТУХ')) != v.plate:
+            raise UploadError(f'Строка {rownum}: госномер не совпадает с машиной {v.name}.')
+        if isinstance(date, dt.datetime):
+            date = date.date()
+        if not isinstance(date, dt.date):
+            try:
+                date = dt.date.fromisoformat(str(date))
+            except ValueError:
+                raise UploadError(f'Строка {rownum}: нужна дата из выбранного месяца.') from None
+        if date.strftime('%Y-%m') != ym:
+            raise UploadError(f'Строка {rownum}: дата не относится к месяцу {ym_label(ym)}.')
+        liters = []
+        for value in values:
+            try:
+                number = Decimal(str(value).strip().replace(' ', '').replace('\xa0', '').replace(',', '.')) if value is not None and str(value).strip() else Decimal(0)
+                if isinstance(value, bool) or not number.is_finite() or number < 0 or number > 1000000:
+                    raise ValueError
+                if number != number.quantize(Decimal('0.001')):
+                    raise ValueError
+            except (InvalidOperation, ValueError):
+                raise UploadError(f'Строка {rownum}: литры должны быть числом от 0 до 1 000 000, до трёх знаков после запятой.') from None
+            liters.append(float(number))
+        key = date.isoformat()
+        if key in daily[v.key]:
+            raise UploadError(f'Строка {rownum}: повтор машины {v.name} за {date:%d.%m.%Y}. Объедините литры в одну строку.')
+        daily[v.key][key] = liters
+    return daily, set(daily)
+
+
 def build_template(db: Session, ym: str, keys: list[str]) -> openpyxl.Workbook:
     """Шаблон месяца: машины строками, статьи столбцами; ниже — общие расходы в тех же столбцах."""
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -826,8 +922,9 @@ def plan_park(ctx: Ctx, wb) -> dict:
         plan['schedule'] = plan_sched
     # --- заправки
     if 'Анализ ЗАПРАВОК' in names:
-        daily, keys = parsing.parse_fuel(wb)
-        per_month = defaultdict(lambda: {'days': [], 'cars': set(), 'liters': 0.0})
+        fuel_template = '_ft_fuel' in wb.sheetnames and wb['_ft_fuel']['A1'].value == 'fibertrack-fuel-template'
+        daily, keys = parse_fuel_template(ctx, wb) if fuel_template else parsing.parse_fuel(wb)
+        per_month = defaultdict(lambda: {'days': [], 'cars': set(), 'liters': 0.0, 'gl': 0.0})
         unknown = sorted(k for k in keys if k not in ctx.vehicles)
         for k, days in daily.items():
             if k not in ctx.vehicles:
@@ -837,22 +934,28 @@ def plan_park(ctx: Ctx, wb) -> dict:
                 m['days'].append([k, d, rn, e1, gl])
                 m['cars'].add(k)
                 m['liters'] += rn + e1
+                m['gl'] += gl
         rows, plan_fuel, closed = [], [], []
         for ym in sorted(per_month):
             m = per_month[ym]
-            disp = [ym_label(ym), str(len(m['cars'])), f"{m['liters']:,.0f}".replace(',', ' ') + ' л']
+            liters_label = lambda v: f"{v:,.3f}".replace(',', ' ').replace('.', ',') + ' л'
+            disp = [ym_label(ym), str(len(m['cars'])), liters_label(m['liters']), liters_label(m['gl']), str(len(m['days']))]
             if ctx.is_open(ym):
-                plan_fuel.append({'ym': ym, 'days': m['days']})
+                plan_fuel.append({'ym': ym, 'days': m['days'], 'replace_days': fuel_template})
                 months.add(ym)
-                rows.append(row(disp, 'ok', 'будет записано (заменит заправки месяца)'))
+                rows.append(row(disp, 'ok', 'будет записано (заменит только заполненные машины и дни)' if fuel_template else 'будет записано (заменит заправки месяца)'))
             else:
                 closed.append(ym)
         notes = []
+        if not daily:
+            notes.append('В файле нет заполненных литров. Заполните РН, Е100 или ГЛОНАСС и загрузите файл снова.')
+        if fuel_template:
+            notes.append('Заполненная строка заменяет все три значения машины за день; пустые колонки в ней считаются нулём. Полностью пустые строки, другие дни и машины не меняются.')
         if closed:
-            notes.append(f'Закрытые месяцы не меняются: пропущено {len(closed)}.')
+            notes.append(f'Месяцы закрыты или не открыты: пропущено {len(closed)}. Владелец может открыть месяц в разделе «Месяцы».')
         if unknown:
             notes.append('Нет в справочнике, пропущено: ' + ', '.join(parsing.display(k) for k in unknown) + '.')
-        sections.append(section('fuel', 'Заправки', ['Месяц', 'Машин', 'По картам'], rows, notes, f'{len(plan_fuel)} мес.'))
+        sections.append(section('fuel', 'Заправки', ['Месяц', 'Машин', 'По картам', 'ГЛОНАСС', 'Машино-дней'], rows, notes, f'{len(plan_fuel)} мес.'))
         plan['fuel'] = plan_fuel
     review = [r for r in parsing.review if any(ym_label(ym).lower() in r['where'].lower() for ym in months if ym != 'vehicles')]
     plan['review'] = review
@@ -908,6 +1011,9 @@ def apply_park(ctx: Ctx, up: Upload, user: User, plan: dict, backup: dict) -> li
         y, mo = map(int, m['ym'].split('-'))
         start, end = dt.date(y, mo, 1), dt.date(y, mo, days_in(m['ym']))
         old = list(db.scalars(select(FuelDay).where(FuelDay.date >= start, FuelDay.date <= end)))
+        if m.get('replace_days'):
+            pairs = {(ctx.vehicles[k].id, dt.date.fromisoformat(d)) for k, d, *_ in m['days']}
+            old = [o for o in old if (o.vehicle_id, o.date) in pairs]
         backup['fuel_days'] += [row_to_dict(o) for o in old]
         for o in old:
             db.delete(o)

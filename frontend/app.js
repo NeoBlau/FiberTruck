@@ -116,7 +116,7 @@ const REP_YEAR = () => ((UI.STATE && UI.STATE.ym) || D.generated).slice(0, 4);
 const SCHED = Object.fromEntries(D.schedule.map(m => [m.ym, m]));
 const PROFIT_YMS = PROFIT_MONTHS.filter(hasProfit);
 const SCHED_YMS = D.schedule.map(m => m.ym);
-const ALL_YMS = [...new Set([...SCHED_YMS, ...PROFIT_YMS, ...Object.keys(D.periods || {}), ...Object.keys(INPUT)])].sort();
+const ALL_YMS = [...new Set([...SCHED_YMS, ...PROFIT_YMS, ...Object.keys(D.periods || {}), ...Object.keys(INPUT), ...Object.keys(D.fuel_month || {})])].sort();
 /* месяц по умолчанию: последний, где прибыль из таблицы или введено хотя бы по половине машин */
 const isComplete = ym => histMonth(ym) || finMonth(ym);
 const LAST_PROFIT = [...PROFIT_YMS].reverse().find(isComplete) || PROFIT_YMS[PROFIT_YMS.length - 1];
@@ -703,11 +703,13 @@ PAGES.years = () => {
 
 /* ---------- Топливо ---------- */
 PAGES.fuel = () => {
-  const fyms = Object.keys(D.fuel_month).sort();
-  if (!fyms.length) { topbar('Топливо'); $('#content').innerHTML = empty('Заправок пока нет', 'Здесь будут литры по картам и ГЛОНАСС. Загрузите файл парка на экране «Загрузка и ввод» — лист «Анализ ЗАПРАВОК».', 'fuel'); return; }
-  let ym = fyms.includes(STATE.ym) ? STATE.ym : fyms[fyms.length - 1];
-  topbar('Топливо', { extra: `<div class="seg">${fyms.map(y => `<button data-fy="${y}" class="${y === ym ? 'on' : ''}">${ymShort(y)}</button>`).join('')}</div>` });
-  $$('[data-fy]').forEach(b => b.onclick = () => { STATE.ym = b.dataset.fy; render(); });
+  const ym = STATE.ym;
+  const controls = ROLE === 'admin' ? `<a class="btn" href="/api/fuel-template/${ym}" id="fuelTemplate">Скачать шаблон топлива</a><a class="btn" href="#/input">Загрузить заполненный файл</a>` : '';
+  topbar('Топливо', {month: true, extra: controls});
+  if (!D.fuel_month[ym]) {
+    $('#content').innerHTML = empty('Заправок за этот месяц пока нет', `Заполните литры по РН, Е100 и ГЛОНАСС в шаблоне топлива. ${ROLE === 'admin' ? 'Скачайте его кнопкой сверху и загрузите через «Загрузка и ввод».' : 'Шаблон скачивает и загружает владелец или бухгалтер через «Загрузка и ввод».'} Суммы в рублях вносятся отдельно в обычном шаблоне месяца.`, 'fuel');
+    return;
+  }
   const fm = D.fuel_month[ym] || {};
   const rows = Object.entries(fm).map(([k, f]) => { const card = f.rn + f.e100; const gl = f.gl_days ? f.gl : null; const diff = gl != null && gl > 0 ? (card - gl) / gl * 100 : null;
     return { k, card, rn: f.rn, e100: f.e100, gl, diff, anomaly: f.anomaly, flag: f.anomaly ? 'anom' : gl == null ? (card ? 'nogl' : '') : Math.abs(diff) > S.fuelPct ? 'over' : '' }; })
@@ -715,7 +717,7 @@ PAGES.fuel = () => {
   const totCard = rows.reduce((s, r) => s + r.card, 0), cmp = rows.filter(r => r.gl != null && !r.anomaly);
   const over = rows.filter(r => r.flag === 'over').length;
   const flagHtml = r => r.flag === 'over' ? `<span class="chip neg">${r.diff > 0 ? 'карта больше' : 'ГЛОНАСС больше'}</span>` : r.flag === 'anom' ? `<span class="chip warn" title="В ГЛОНАСС за сутки больше ${S.glonassMax} л — похоже, внесены километры">проверить ГЛОНАСС</span>` : r.flag === 'nogl' ? '<span class="chip">нет ГЛОНАСС</span>' : '<span class="ok">в норме</span>';
-  $('#content').innerHTML = `<div class="note">${ico('info')}<div>Данные — из листа «Анализ ЗАПРАВОК» (литры, ${ymLabel(fyms[0]).toLowerCase()} — ${ymLabel(fyms[fyms.length - 1]).toLowerCase()}). Сумм в рублях и пробега там нет, поэтому л/100 км и руб/км появятся после ввода пробега и загрузки выгрузок РН-Карт / Е100. Порог расхождения — ${S.fuelPct}%${ROLE === 'admin' ? ', меняется в <a href="#/settings" style="color:var(--teal-ink)">настройках</a>' : ''}.</div></div>
+  $('#content').innerHTML = `<div class="note">${ico('info')}<div>Данные — из шаблона топлива или листа «Анализ ЗАПРАВОК» (литры, ${ymLabel(ym).toLowerCase()}). Сумм в рублях и пробега там нет, поэтому л/100 км и руб/км требуют отдельных данных о пробеге и расходах в рублях. Порог расхождения — ${S.fuelPct}%${ROLE === 'admin' ? ', меняется в <a href="#/settings" style="color:var(--teal-ink)">настройках</a>' : ''}.</div></div>
     <section class="kpis k4">
       <article class="card kpi"><div class="lbl">Заправлено по картам</div><div class="val">${int(totCard)}<span class="u">л</span></div><div class="delta">${rows.length} машин</div></article>
       <article class="card kpi"><div class="lbl">Сравнимо с ГЛОНАСС</div><div class="val">${cmp.length}<span class="u">маш.</span></div><div class="delta">у остальных нет данных ГЛОНАСС</div></article>
@@ -725,7 +727,7 @@ PAGES.fuel = () => {
     <section class="g21" style="margin-top:14px">
       <div class="card panel"><div class="panel-h"><div><h2>Карта против ГЛОНАСС</h2><p>литры за месяц, машины с данными ГЛОНАСС</p></div></div><div id="fc" class="chart" style="height:${Math.max(260, cmp.length * 26)}px"></div></div>
       <div class="card"><div class="tbl-wrap" style="max-height:${Math.max(330, cmp.length * 26 + 70)}px"><table><thead><tr><th>Машина</th><th>РН, л</th><th class="col-m">Е100, л</th><th>ГЛОНАСС, л</th><th>Разница</th><th></th></tr></thead>
-        <tbody>${rows.map(r => `<tr class="click" data-car="${r.k}"><td><span class="car">${name(r.k)}</span></td><td>${int(r.rn)}</td><td class="col-m">${r.e100 ? int(r.e100) : '—'}</td><td>${r.gl == null ? '—' : int(r.gl)}</td><td class="${r.flag === 'over' ? 'neg-ink' : ''}">${r.diff == null ? '—' : (r.diff > 0 ? '+' : '') + pct(r.diff, 0)}</td><td>${flagHtml(r)}</td></tr>`).join('')}</tbody></table></div></div>
+        <tbody>${rows.map(r => `<tr class="click" data-car="${r.k}"><td><span class="car">${name(r.k)}</span></td><td>${dec(r.rn, 3)}</td><td class="col-m">${r.e100 ? dec(r.e100, 3) : '—'}</td><td>${r.gl == null ? '—' : dec(r.gl, 3)}</td><td class="${r.flag === 'over' ? 'neg-ink' : ''}">${r.diff == null ? '—' : (r.diff > 0 ? '+' : '') + pct(r.diff, 0)}</td><td>${flagHtml(r)}</td></tr>`).join('')}</tbody></table></div></div>
     </section>`;
   const cs = cmp.slice().sort((a, b) => b.card - a.card);
   if (cs.length) chart($('#fc'), {
@@ -876,7 +878,7 @@ PAGES.input = () => {
       <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон месяца в Excel: машины, пробег, дни, доходы, расходы и общие расходы</p></div></div>
         <label class="drop" id="drop"><input type="file" id="file" hidden accept=".xlsx,.xlsm"><span class="ico-circle">${ico('upload', 20)}</span><h3>Перетащите файл сюда</h3><p>или нажмите, чтобы выбрать · Excel .xlsx до 20 МБ</p></label>
         <div id="preview"></div></div>
-      <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода${SCHED[ym] ? '' : ' · графика ещё нет, в списке все машины в работе'}</p></div><div class="spacer"></div><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода${SCHED[ym] ? '' : ' · графика ещё нет, в списке все машины в работе'}</p></div><div class="spacer"></div><a class="btn" href="/api/fuel-template/${ym}" id="fuelTemplate">Скачать шаблон топлива</a><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
         <div style="display:flex;align-items:center;gap:12px;margin:6px 0 14px"><div class="progress" style="flex:1"><span style="width:${keys.length ? done / keys.length * 100 : 0}%"></span></div><b class="num">Внесено ${done} из ${keys.length}</b></div>
         <div class="tbl-wrap" style="max-height:460px"><table><thead><tr><th>Машина</th><th>Пробег, км</th><th>Доходы</th><th class="col-m">Расходы</th><th class="l">Статус</th></tr></thead><tbody>
         ${keys.map(k => { const x = inp[k] || {}; const t = entryTotals(x);

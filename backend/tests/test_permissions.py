@@ -25,6 +25,7 @@ MATRIX = {
     ('POST', '/api/uploads/{upload_id}/discard'): {'admin', 'input'},
     ('POST', '/api/uploads/{upload_id}/rollback'): {'admin'},
     ('GET', '/api/template/{ym}'): {'admin', 'input'},
+    ('GET', '/api/fuel-template/{ym}'): {'admin', 'input'},
 }
 OPEN_TO_ALL = {('POST', '/api/auth/login'), ('POST', '/api/auth/logout'), ('GET', '/api/auth/me'), ('GET', '/api/bootstrap'), ('GET', '/api/health')}
 SAMPLE = {'{key}': '885', '{ym}': '2026-12', '{item_id}': '1', '{upload_id}': '1'}

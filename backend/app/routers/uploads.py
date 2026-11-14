@@ -12,7 +12,7 @@ from ..config import settings
 from ..db import get_db
 from ..models import ScheduleMonth, Upload, User, Vehicle
 from ..security import require_roles
-from ..uploads import UploadError, apply_upload, build_template, make_preview, rollback_upload
+from ..uploads import UploadError, apply_upload, build_fuel_template, build_template, make_preview, rollback_upload
 
 router = APIRouter(prefix='/api', tags=['uploads'])
 editors = require_roles('admin', 'input')
@@ -145,3 +145,17 @@ def template(ym: str, user: User = Depends(editors), db: Session = Depends(get_d
     return StreamingResponse(buf, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                              headers={'Content-Disposition': f"attachment; filename*=UTF-8''{quote(fname)}"})
 
+
+
+@router.get('/fuel-template/{ym}')
+def fuel_template(ym: str, user: User = Depends(editors), db: Session = Depends(get_db)):
+    if not re.fullmatch(r'20\d\d-(0[1-9]|1[0-2])', ym):
+        raise HTTPException(422, 'Месяц в формате ГГГГ-ММ')
+    vehicles = list(db.scalars(select(Vehicle).where(Vehicle.is_active.is_(True))))
+    keys = [v.key for v in sorted(vehicles, key=lambda v: v.name)]
+    wb = build_fuel_template(db, ym, keys)
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(buf, media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                             headers={'Content-Disposition': f'attachment; filename="FiberTruck_fuel_{ym}.xlsx"'})

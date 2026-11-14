@@ -1047,7 +1047,30 @@ PAGES.periods = () => {
     return `<tr><td><b>${ymLabel(ym)}</b>${ym === CUR_YM ? ' <span class="chip">текущий</span>' : ''}</td><td class="l"><span class="chip ${ST_LABEL[st][1]}">${ST_LABEL[st][0]}</span></td><td class="l muted">${fill}</td><td>${btn}</td></tr>`;
   }).join('');
   $('#content').innerHTML = `<div class="note">${ico('info')}<div><b>Как это работает.</b> Бухгалтер вносит данные только в открытые месяцы. Закрытый месяц не меняется: цифры в отчётах фиксируются. Новый месяц можно открыть заранее — например, ноябрь, чтобы бухгалтер начал вносить первые документы. Текущий месяц открывается сам 1-го числа.</div></div>
+    <form id="addPeriodForm" class="card panel" style="margin-bottom:14px">
+      <h2>Добавить месяц</h2><p>Выберите месяц и год — он появится в списке и станет доступен для ввода. Можно добавить любой прошлый месяц или до трёх месяцев вперёд.</p>
+      <div class="toolbar"><label for="newPeriod">Месяц и год</label><input class="inp" type="month" id="newPeriod" min="2000-01" max="${nextYm(nextYm(nextYm(CUR_YM)))}" value="${prevYm(Object.keys(PERIODS).sort()[0] || CUR_YM)}" required>
+      <button class="btn primary" type="submit" id="addPeriod">+ Добавить месяц</button></div>
+      <div class="err" id="addPeriodError" role="alert"></div>
+    </form>
     <div class="card"><div class="tbl-wrap"><table><thead><tr><th>Месяц</th><th class="l">Статус</th><th class="l">Заполнение</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  $('#addPeriodForm').onsubmit = async e => {
+    e.preventDefault();
+    const ym = $('#newPeriod').value, error = $('#addPeriodError'), button = $('#addPeriod');
+    error.textContent = '';
+    if (!/^20\d\d-(0[1-9]|1[0-2])$/.test(ym)) { error.textContent = 'Выберите месяц и год.'; return; }
+    if (PERIODS[ym]) {
+      error.textContent = PERIODS[ym] === 'closed' ? 'Этот месяц уже есть и закрыт. Нажмите «Переоткрыть» в его строке ниже.' : 'Этот месяц уже добавлен и открыт для ввода.';
+      return;
+    }
+    button.disabled = true;
+    try {
+      await api(`/api/periods/${ym}/open`, {method: 'POST'});
+      STATE.ym = ym;
+      await refresh();
+      toast(`${ymLabel(ym)} добавлен. Можно перейти в «Загрузка и ввод».`);
+    } catch (err) { button.disabled = false; error.textContent = err.message; }
+  };
   const act = async (ym, action, body, msg) => { try { await api(`/api/periods/${ym}/${action}`, { method: 'POST', body }); toast(msg); await refresh(); } catch (e) { toast(e.message); } };
   $$('[data-open]').forEach(b => b.onclick = () => { const ym = b.dataset.open; act(ym, 'open', undefined, `${ymLabel(ym)} открыт для ввода`); });
   $$('[data-close]').forEach(b => b.onclick = () => {

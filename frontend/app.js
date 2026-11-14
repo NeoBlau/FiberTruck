@@ -1295,6 +1295,84 @@ function render() {
 return { render, dispose: () => charts.splice(0).forEach(c => c.dispose()), resize: () => charts.forEach(c => c.resize()) };
 }
 
+/* Horizontal table controls stay within reach while the native scrollbar is below the viewport. */
+function installTableScrollDock() {
+  const dock = document.createElement('div');
+  dock.className = 'table-scroll-dock';
+  dock.hidden = true;
+  dock.innerHTML = '<span class="table-scroll-label">Таблица ↔</span><button type="button" class="btn" aria-label="Прокрутить таблицу влево">←</button><div class="table-scroll-track" tabindex="0" role="region" aria-label="Горизонтальная прокрутка таблицы"><div></div></div><button type="button" class="btn" aria-label="Прокрутить таблицу вправо">→</button>';
+  document.body.appendChild(dock);
+  const track = dock.querySelector('.table-scroll-track'), spacer = track.firstElementChild;
+  const [left, right] = dock.querySelectorAll('button');
+  let target = null, frame = 0, expectedTrack = null;
+  const max = el => Math.max(0, el.scrollWidth - el.clientWidth);
+  function sync() {
+    if (!target) return;
+    const position = max(target) ? target.scrollLeft / max(target) * max(track) : 0;
+    if (Math.abs(track.scrollLeft - position) > 1) {
+      track.scrollLeft = position;
+      expectedTrack = track.scrollLeft;
+    }
+    left.disabled = target.scrollLeft <= 1;
+    right.disabled = target.scrollLeft >= max(target) - 1;
+  }
+  function update() {
+    frame = 0;
+    const content = document.getElementById('content'), top = document.getElementById('top');
+    const topEdge = top ? top.getBoundingClientRect().bottom : 0;
+    const candidates = [...content.querySelectorAll('.tbl-wrap')].map(el => ({el, rect: el.getBoundingClientRect()}))
+      .filter(({el, rect}) => max(el) > 1 && rect.width > 120 && rect.top < innerHeight - 45 && rect.bottom > topEdge + 40);
+    candidates.sort((a,b) => Math.min(b.rect.bottom,innerHeight) - Math.max(b.rect.top,topEdge) - (Math.min(a.rect.bottom,innerHeight) - Math.max(a.rect.top,topEdge)));
+    const next = candidates[0];
+    if (!next || document.querySelector('#modal.open') || next.rect.bottom <= innerHeight - 8) {
+      dock.hidden = true; target = null; return;
+    }
+    target = next.el;
+    dock.hidden = false;
+    const x = Math.max(8, next.rect.left), end = Math.min(innerWidth - 8, next.rect.right);
+    dock.style.left = x + 'px';
+    dock.style.width = Math.max(0, end - x) + 'px';
+    spacer.style.width = target.scrollWidth + 'px';
+    sync();
+  }
+  function schedule() { if (!frame) frame = requestAnimationFrame(update); }
+  track.addEventListener('scroll', () => {
+    if (expectedTrack != null && Math.abs(track.scrollLeft - expectedTrack) < 1) { expectedTrack = null; return; }
+    expectedTrack = null;
+    if (!target || !max(track)) return;
+    const position = track.scrollLeft / max(track) * max(target);
+    if (Math.abs(target.scrollLeft - position) > 1) target.scrollLeft = position;
+    left.disabled = target.scrollLeft <= 1;
+    right.disabled = target.scrollLeft >= max(target) - 1;
+  });
+  const move = direction => { if (target) target.scrollBy({left: direction * Math.max(160, target.clientWidth * 0.7), behavior: 'smooth'}); };
+  left.onclick = () => move(-1);
+  right.onclick = () => move(1);
+  track.onkeydown = e => {
+    if (!target) return;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); move(e.key === 'ArrowLeft' ? -1 : 1); }
+    if (e.key === 'Home' || e.key === 'End') { e.preventDefault(); target.scrollLeft = e.key === 'Home' ? 0 : max(target); }
+  };
+  document.addEventListener('scroll', e => {
+    if (e.target === track) return;
+    if (e.target === target) sync(); else schedule();
+  }, true);
+  document.addEventListener('wheel', e => {
+    const wrapper = e.target.closest?.('.tbl-wrap');
+    if (!e.shiftKey || !wrapper || Math.abs(e.deltaX) >= Math.abs(e.deltaY) || !max(wrapper)) return;
+    const before = wrapper.scrollLeft;
+    wrapper.scrollLeft += e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? wrapper.clientWidth : 1);
+    if (wrapper.scrollLeft !== before) e.preventDefault();
+  }, {passive: false});
+  addEventListener('resize', schedule);
+  new MutationObserver(schedule).observe(document.getElementById('content'), {childList: true, subtree: true});
+  new MutationObserver(schedule).observe(document.getElementById('modal'), {attributes: true, attributeFilter: ['class']});
+  new ResizeObserver(schedule).observe(document.querySelector('.main'));
+  document.fonts?.ready.then(schedule);
+  schedule();
+}
+installTableScrollDock();
+
 let rt;
 addEventListener('resize', () => { clearTimeout(rt); rt = setTimeout(() => app && app.resize(), 120); });
 addEventListener('hashchange', () => app && app.render());

@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..models import ScheduleMonth, Upload, User, Vehicle
+from ..fleet import month_vehicle_keys
+from ..models import Upload, User
 from ..security import require_roles
 from ..uploads import UploadError, apply_upload, build_fuel_template, build_template, make_preview, rollback_upload
 
@@ -131,11 +132,7 @@ def rollback(upload_id: int, user: User = Depends(require_roles('admin')), db: S
 def template(ym: str, user: User = Depends(editors), db: Session = Depends(get_db)):
     if not re.fullmatch(r'20\d\d-(0[1-9]|1[0-2])', ym):
         raise HTTPException(422, 'Месяц в формате ГГГГ-ММ')
-    # машины месяца: из графика этого месяца, а если его нет — из последнего графика; плюс добавленные вручную; только в работе
-    have = db.scalar(select(ScheduleMonth.ym).where(ScheduleMonth.ym == ym).limit(1))
-    src_ym = have or db.scalar(select(ScheduleMonth.ym).order_by(ScheduleMonth.ym.desc()).limit(1))
-    ids = set(db.scalars(select(ScheduleMonth.vehicle_id).where(ScheduleMonth.ym == src_ym))) if src_ym else set()
-    keys = [v.key for v in db.scalars(select(Vehicle).where(Vehicle.is_active.is_(True))) if v.id in ids or v.manual or not src_ym]  # графиков нет — весь парк
+    keys = month_vehicle_keys(db, ym)
     wb = build_template(db, ym, keys)
     buf = io.BytesIO()
     wb.save(buf)
@@ -151,8 +148,7 @@ def template(ym: str, user: User = Depends(editors), db: Session = Depends(get_d
 def fuel_template(ym: str, user: User = Depends(editors), db: Session = Depends(get_db)):
     if not re.fullmatch(r'20\d\d-(0[1-9]|1[0-2])', ym):
         raise HTTPException(422, 'Месяц в формате ГГГГ-ММ')
-    vehicles = list(db.scalars(select(Vehicle).where(Vehicle.is_active.is_(True))))
-    keys = [v.key for v in sorted(vehicles, key=lambda v: v.name)]
+    keys = month_vehicle_keys(db, ym)
     wb = build_fuel_template(db, ym, keys)
     buf = io.BytesIO()
     wb.save(buf)

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .config import settings as cfg
+from .fleet import month_vehicle_map
 from .models import (AuditLog, FleetDaysHistory, FuelDay, Mileage, Operation, Period, ReferenceValue, ReviewItem,
                      ScheduleMonth, Setting, Upload, User, Vehicle)
 
@@ -80,11 +81,24 @@ def build_payload(db: Session, user: User) -> dict:
     open_yms = [ym for ym, st in periods.items() if st == 'open']
     analytics = user.role in ANALYTICS_ROLES
 
+    # Same explicit month roster feeds both Excel templates and the input screen.
+    y, m = map(int, current_ym().split('-'))
+    last_ym = f'{y + (m + 2) // 12}-{(m + 2) % 12 + 1:02d}'
+    roster_months = []
+    ym = min(periods, default=current_ym())
+    while ym <= last_ym:
+        roster_months.append(ym)
+        year, month = map(int, ym.split('-'))
+        ym = f'{year + month // 12}-{month % 12 + 1:02d}'
+    if not analytics:
+        roster_months = open_yms
+
     out = {
         'generated': today().isoformat(),
         'me': {'login': user.login, 'name': user.full_name, 'role': user.role},
         'settings': s,
         'periods': periods,
+        'month_vehicles': month_vehicle_map(db, roster_months),
         'vehicles': {v.key: vehicle_dict(v) for v in vehicles},
         'review': [{'id': r.id, 'kind': r.kind, 'value': r.value, 'where': r.where_text, 'action': r.action}
                    for r in db.scalars(select(ReviewItem).where(ReviewItem.resolved_at.is_(None)).order_by(ReviewItem.id))],

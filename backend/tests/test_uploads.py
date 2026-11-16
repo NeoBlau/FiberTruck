@@ -1,6 +1,7 @@
 """Загрузки: шаблон (без файлов заказчика), файл парка и таблица прибыли (на файлах заказчика, если указаны)."""
 import io
 import os
+import re
 
 import openpyxl
 import pytest
@@ -17,7 +18,10 @@ real = pytest.mark.skipif(not (PROFIT and PARK), reason='не заданы пу�
 def filled_template(client, ym='2026-10', **cells) -> bytes:
     wb = openpyxl.load_workbook(io.BytesIO(client.get(f'/api/template/{ym}').content))
     ws = wb.active
+    vehicle_row = next(r for r in range(3, ws.max_row + 1) if str(ws.cell(r, 1).value) == '885')
     for ref, val in cells.items():
+        # Test inputs target vehicle 885 even when other active cars precede it.
+        ref = re.sub(r'(?<=[A-Z])3$', str(vehicle_row), ref)
         ws[ref] = val
     buf = io.BytesIO()
     wb.save(buf)
@@ -40,13 +44,16 @@ def test_template_lists_month_cars_and_round_trips():
     u = login('input')
     wb = openpyxl.load_workbook(io.BytesIO(u.get('/api/template/2026-10').content))
     ws = wb.active
-    assert ws.title == 'Октябрь 2026' and ws['A3'].value == '885' and ws['B3'].value == 'Т885ВХ58'
+    assert ws.title == 'Октябрь 2026'
+    cars = {str(ws.cell(r, 1).value): ws.cell(r, 2).value for r in range(3, ws.max_row + 1)}
+    assert cars['885'] == 'Т885ВХ58' and '409' in cars
     data = filled_template(u, C3=11200, D3='1 100 000,50', F3=300000, R3=20, S3='22%', T3='да')
     r = upload(u, data)
     assert r.status_code == 200, r.text
     p = r.json()
     rows = p['sections'][0]['rows']
-    assert rows[0]['status'] == 'ok', rows[0]
+    vehicle_row = next(row for row in rows if row['cells'][0] == '885')
+    assert vehicle_row['status'] == 'ok', vehicle_row
     assert p['can_apply'] and p['months'] == ['2026-10']
     assert u.post(f"/api/uploads/{p['id']}/apply").status_code == 200
     with SessionLocal() as db:
@@ -61,7 +68,7 @@ def test_template_errors_are_shown_and_not_applied():
     u = login('input')
     data = filled_template(u, C3='много', D3='сто', F3=-1, R3=40)
     p = upload(u, data).json()
-    row = p['sections'][0]['rows'][0]
+    row = next(row for row in p['sections'][0]['rows'] if row['cells'][0] == '885')
     assert row['status'] == 'error'
     assert 'пробег' in row['note'] and 'не число' in row['note'] and 'отрицательная' in row['note'] and 'дней' in row['note']
     assert not p['can_apply']

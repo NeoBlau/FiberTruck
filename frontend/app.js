@@ -110,7 +110,7 @@ const kmTotal = ym => Object.values(KM[ym] || {}).reduce((s, v) => s + (v || 0),
 const revenueOf = ym => hasFin(ym) ? Object.keys(FIN[ym].cars).reduce((s, k) => s + carIncome(ym, k), 0) : null;
 /* месяц считается по шаблону, когда в нём есть хотя бы половина машин: тогда он главнее таблицы прибыли */
 const finMonth = ym => hasFin(ym) && Object.keys(FIN[ym].cars).length * 2 >= monthCarCount(ym);
-const monthCarCount = ym => SCHED[ym] ? SCHED[ym].rows.length : Object.keys(D.profit).length || Object.values(V).filter(v => v.active !== false && !v.history_only).length;
+const monthCarCount = ym => (D.month_vehicles || {})[ym]?.length ?? (SCHED[ym] ? SCHED[ym].rows.length : Object.keys(D.profit).length || Object.values(V).filter(v => v.active !== false && !v.history_only).length);
 const ART_NAMES = { revenue: 'Выручка от перевозок', other_income: 'Прочий доход', fuel: 'Топливо', repair: 'Ремонт и запчасти', maintenance: 'ТО', tires: 'Шины', salary: 'Зарплата водителей', per_diem: 'Суточные', tolls: 'Дороги и «Платон»', insurance: 'Страхование', leasing: 'Лизинг / кредит', wash: 'Мойка', fines: 'Штрафы', other: 'Прочее' };
 const REP_YEAR = () => ((UI.STATE && UI.STATE.ym) || D.generated).slice(0, 4);
 const SCHED = Object.fromEntries(D.schedule.map(m => [m.ym, m]));
@@ -855,14 +855,8 @@ const CUR_YM = `${TODAY.getFullYear()}-${String(TODAY.getMonth() + 1).padStart(2
 const periodStatus = ym => PERIODS[ym] || 'future';
 const PERIOD_YMS = () => { const out = []; let y = Object.keys(PERIODS).sort()[0] || CUR_YM; const last = nextYm(nextYm(nextYm(CUR_YM))); while (y <= last) { out.push(y); y = nextYm(y); } return out; };
 const openMonths = () => PERIOD_YMS().filter(y => periodStatus(y) === 'open');
-/* машины месяца: из графика, а для месяца без графика — все машины в работе */
-const LAST_SCHED = SCHED_YMS[SCHED_YMS.length - 1];
-/* машины месяца: из графика месяца, иначе из последнего графика; графиков нет — весь действующий парк */
-const monthCars = ym => {
-  const src = SCHED[ym] || SCHED[LAST_SCHED];
-  const keys = src ? [...src.rows.map(r => r.k), ...Object.keys(V).filter(k => V[k].manual)] : Object.keys(V);
-  return [...new Set(keys)].filter(k => V[k] && isActive(k, V[k]));
-};
+/* Сервер формирует единый состав месяца для ввода и обоих Excel-шаблонов. */
+const monthCars = ym => (D.month_vehicles || {})[ym] || [];
 const ARTICLES = [['revenue', 'Выручка от перевозок'], ['other_income', 'Прочий доход'], ['fuel', 'Топливо'], ['repair', 'Ремонт и запчасти'],
   ['maintenance', 'ТО'], ['tires', 'Шины'], ['salary', 'Зарплата водителей'], ['per_diem', 'Суточные'], ['tolls', 'Платные дороги и «Платон»'],
   ['insurance', 'Страхование'], ['leasing', 'Лизинг / кредит'], ['wash', 'Мойка'], ['fines', 'Штрафы'], ['other', 'Прочее']];
@@ -887,7 +881,7 @@ PAGES.input = () => {
       <div class="card panel"><div class="panel-h"><div><h2>Загрузить файл</h2><p>шаблон месяца в Excel: машины, пробег, дни, доходы, расходы и общие расходы</p></div></div>
         <label class="drop" id="drop"><input type="file" id="file" hidden accept=".xlsx,.xlsm"><span class="ico-circle">${ico('upload', 20)}</span><h3>Перетащите файл сюда</h3><p>или нажмите, чтобы выбрать · Excel .xlsx до 20 МБ</p></label>
         <div id="preview"></div></div>
-      <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода${SCHED[ym] ? '' : ' · графика ещё нет, в списке все машины в работе'}</p></div><div class="spacer"></div><a class="btn" href="/api/fuel-template/${ym}" id="fuelTemplate">Скачать шаблон топлива</a><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Статус по машинам</h2><p>${ymLabel(ym)} · открыт для ввода · состав по датам работы машин</p></div><div class="spacer"></div><a class="btn" href="/api/fuel-template/${ym}" id="fuelTemplate">Скачать шаблон топлива</a><button class="btn" id="tpl">${ico('dl', 15)}Скачать шаблон на месяц</button></div>
         <div style="display:flex;align-items:center;gap:12px;margin:6px 0 14px"><div class="progress" style="flex:1"><span style="width:${keys.length ? done / keys.length * 100 : 0}%"></span></div><b class="num">Внесено ${done} из ${keys.length}</b></div>
         <div class="tbl-wrap" style="max-height:460px"><table><thead><tr><th>Машина</th><th>Пробег, км</th><th>Доходы</th><th class="col-m">Расходы</th><th class="l">Статус</th></tr></thead><tbody>
         ${keys.map(k => { const x = inp[k] || {}; const t = entryTotals(x);
@@ -1052,7 +1046,7 @@ PAGES.periods = () => {
   const ST_LABEL = { open: ['открыт', 'pos'], closed: ['закрыт', ''], future: ['не начат', 'warn'] };
   const rows = PERIOD_YMS().slice().reverse().map(ym => {
     const st = periodStatus(ym), keys = monthCars(ym), inp = INPUT[ym] || {};
-    const done = keys.filter(k => inp[k] && inp[k].km != null && inp[k].rev != null).length;
+    const done = keys.filter(k => inp[k] && inp[k].km != null && entryTotals(inp[k]).hasRev).length;
     const fill = hasProfit(ym) ? 'прибыль внесена (таблица прибыли)' : `внесено ${done} из ${keys.length}`;
     const btn = st === 'open' ? `<button class="btn" data-close="${ym}">Закрыть</button>` : st === 'closed' ? `<button class="btn" data-reopen="${ym}">Переоткрыть</button>` : `<button class="btn primary" data-open="${ym}">Открыть для ввода</button>`;
     return `<tr><td><b>${ymLabel(ym)}</b>${ym === CUR_YM ? ' <span class="chip">текущий</span>' : ''}</td><td class="l"><span class="chip ${ST_LABEL[st][1]}">${ST_LABEL[st][0]}</span></td><td class="l muted">${fill}</td><td>${btn}</td></tr>`;
@@ -1086,7 +1080,7 @@ PAGES.periods = () => {
   $$('[data-open]').forEach(b => b.onclick = () => { const ym = b.dataset.open; act(ym, 'open', undefined, `${ymLabel(ym)} открыт для ввода`); });
   $$('[data-close]').forEach(b => b.onclick = () => {
     const ym = b.dataset.close, keys = monthCars(ym), inp = INPUT[ym] || {};
-    const left = keys.filter(k => !(inp[k] && inp[k].km != null && inp[k].rev != null)).length;
+    const left = keys.filter(k => !(inp[k] && inp[k].km != null && entryTotals(inp[k]).hasRev)).length;
     if (!confirm(`Закрыть ${ymLabel(ym).toLowerCase()}?${left ? `\n\nНе внесено по ${left} машинам из ${keys.length}.` : ''}\nПосле закрытия бухгалтер не сможет менять данные за этот месяц.`)) return;
     act(ym, 'close', undefined, `${ymLabel(ym)} закрыт`); });
   $$('[data-reopen]').forEach(b => b.onclick = () => {
@@ -1144,9 +1138,9 @@ function editCar(k) {
       ${inp('f-amort', 'Амортизация в месяц, ₽', v.amort, 'type="number" min="0" step="1000"')}
       ${inp('f-trailer', 'Прицеп (госномер)', v.trailer, 'type="text" placeholder="АН 9275/58"')}
       ${inp('f-tmodel', 'Модель прицепа', v.trailer_model, 'type="text"')}
-      ${inp('f-from', 'В парке с', v.from, 'type="date"')}
-      ${inp('f-to', 'Выведена из парка', v.to, 'type="date"')}
-      <label class="full" style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" id="f-active" ${isActive(k, v) ? 'checked' : ''}> Машина в работе (попадает в шаблон месяца)</label>
+      ${inp('f-from', 'В парке с (включая этот день)', v.from, 'type="date"')}
+      ${inp('f-to', 'Выведена с (с этого дня не работает)', v.to, 'type="date"')}
+      <label class="full" style="display:flex;gap:8px;align-items:center;flex-direction:row"><input type="checkbox" id="f-active" ${isActive(k, v) ? 'checked' : ''}> Машина сейчас в работе</label>
     </div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px"><button class="btn" id="mc">Отмена</button><button class="btn primary" id="ms">Сохранить</button></div></div>`;
   $('#modal').classList.add('open');

@@ -13,9 +13,19 @@ from tests.test_uploads import upload
 
 
 def filled(client, ym='2026-10', values=(100.125, 20, 115), date=None):
-    response = client.get(f'/api/fuel-template/{ym}')
-    assert response.status_code == 200
-    wb = openpyxl.load_workbook(io.BytesIO(response.content))
+    # Keep coverage for the daily template downloaded by previous releases.
+    wb = openpyxl.Workbook()
+    wb.active.title = 'Анализ ЗАПРАВОК'
+    wb.active.append(['FiberTrack · топливо · ' + ym])
+    wb.active.append(['Дата', 'Машина', 'Госномер', 'РН, л', 'Е100, л', 'ГЛОНАСС, л'])
+    meta = wb.create_sheet('_ft_fuel')
+    meta.append(['fibertrack-fuel-template'])
+    meta.append([ym])
+    import calendar
+    year, month = map(int, ym.split('-'))
+    for vehicle in client.get('/api/bootstrap').json()['vehicles'].values():
+        for day in range(1, calendar.monthrange(year, month)[1]+1):
+            wb.active.append([dt.date(year,month,day),vehicle['name'],vehicle['plate']])
     ws = wb['Анализ ЗАПРАВОК']
     row = next(r for r in range(3, ws.max_row + 1) if str(ws.cell(r, 2).value) == '885')
     for c, value in enumerate(values, 4):
@@ -27,16 +37,16 @@ def filled(client, ym='2026-10', values=(100.125, 20, 115), date=None):
     return data.getvalue()
 
 
-def test_download_is_prefilled_with_dates_vehicles_and_liter_columns():
+def test_download_is_monthly_with_exactly_two_columns():
     c = login('input')
     wb = openpyxl.load_workbook(io.BytesIO(c.get('/api/fuel-template/2026-08').content))
     ws = wb['Анализ ЗАПРАВОК']
     assert wb['_ft_fuel']['A2'].value == '2026-08'
-    assert ws.max_row == 64  # two vehicles, 31 days, two header rows
-    assert [ws.cell(2, c).value for c in range(1, 7)] == ['Дата', 'Машина', 'Госномер', 'РН, л', 'Е100, л', 'ГЛОНАСС, л']
-    assert all(ws.cell(r, 1).value.month == 8 for r in range(3, ws.max_row + 1))
-    assert set(ws.cell(r, 2).value for r in range(3, ws.max_row + 1)) == {'409', '885'}
-    assert all(ws.cell(r, c).value is None for r in range(3, ws.max_row + 1) for c in range(4, 7))
+    assert wb['_ft_fuel']['A1'].value == 'fibertrack-fuel-monthly'
+    assert ws.max_row == 4 and ws.max_column == 2
+    assert [ws.cell(2, c).value for c in (1,2)] == ['Автомобиль', 'Количество литров за месяц']
+    assert set(ws.cell(r, 1).value for r in (3,4)) == {'409', '885'}
+    assert all(ws.cell(r, 2).value is None for r in (3,4))
     assert c.get('/api/fuel-template/2026-99').status_code == 422
 
 

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings as cfg
 from .models import (AuditLog, FleetDaysHistory, FuelDay, Mileage, Operation, Period, ReferenceValue, ReviewItem,
-                     ScheduleMonth, Setting, User, Vehicle)
+                     ScheduleMonth, Setting, Upload, User, Vehicle)
 
 DEFAULT_UI_SETTINGS = {'alloc': 'days', 'groups': [2013, 2017, 2021], 'fuelPct': 10, 'glonassMax': 1500,
                        'kmMin': 0, 'kmMax': 30000, 'lMin': 20, 'lMax': 45}
@@ -165,9 +165,16 @@ def build_payload(db: Session, user: User) -> dict:
     out['wdays'] = dict(wd)
 
     fm: dict = defaultdict(lambda: defaultdict(lambda: {'rn': 0.0, 'e100': 0.0, 'gl': 0.0, 'gl_days': 0, 'card_days': 0, 'anomaly': 0}))
-    for f in db.scalars(select(FuelDay)):
+    fuel_rows = list(db.scalars(select(FuelDay)))
+    fuel_upload_ids = {f.upload_id for f in fuel_rows if f.upload_id}
+    monthly_uploads = {(uid, m['ym']) for uid, plan in db.execute(select(Upload.id, Upload.plan).where(Upload.id.in_(fuel_upload_ids)))
+                       for m in plan.get('fuel', []) if m.get('monthly')} if fuel_upload_ids else set()
+    for f in fuel_rows:
         e = fm[f.date.strftime('%Y-%m')][keys[f.vehicle_id]]
         rn, e1, gl = float(f.rn_l), float(f.e100_l), float(f.glonass_l)
+        if (f.upload_id, f.date.strftime('%Y-%m')) in monthly_uploads:
+            e['monthly_liters'] = e.get('monthly_liters', 0) + rn
+            continue
         e['rn'] += rn
         e['e100'] += e1
         e['card_days'] += 1 if rn or e1 else 0

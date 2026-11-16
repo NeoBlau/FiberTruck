@@ -561,7 +561,7 @@ PAGES.car = (k) => {
       <div class="stack">
         <div class="card panel"><div class="panel-h"><div><h2>Структура расходов</h2><p>${ymLabel(ym)}${finCar(ym, k) ? ` · доходы ${rub(carIncome(ym, k))}${kmOf(ym, k) ? ` · ${int(kmOf(ym, k))} км · расход ${dec(carExpense(ym, k) / kmOf(ym, k), 1)} ₽/км` : ''}` : ''}</p></div></div>
           ${finCar(ym, k) && carExpense(ym, k) ? '<div id="cx" class="chart" style="height:220px"></div>' : empty('Статьи расходов не внесены', 'Топливо, ремонт, зарплата и другие статьи появятся, когда бухгалтер внесёт их за месяц — по шаблону или вручную.')}</div>
-        <div class="card panel"><div class="panel-h"><div><h2>Топливо</h2><p>литры по топливной карте и ГЛОНАСС</p></div></div>${fuel.length ? '<div id="cf" class="chart" style="height:200px"></div>' : empty('Нет данных о заправках', 'По этой машине в «Анализе заправок» нет записей.', 'fuel')}</div>
+        <div class="card panel"><div class="panel-h"><div><h2>Топливо</h2><p>литры по месяцам; ГЛОНАСС — при наличии данных</p></div></div>${fuel.length ? '<div id="cf" class="chart" style="height:200px"></div>' : empty('Нет данных о заправках', 'По этой машине в «Анализе заправок» нет записей.', 'fuel')}</div>
       </div>
     </section>`;
   $('#content').insertAdjacentHTML('beforeend', `<section class="card panel" style="margin-top:14px"><h2>Все показатели за ${ymLabel(ym)}</h2><table><tbody>${DETAIL_COLS.slice(3).map(([a,t]) => { const x=detailRows(ym).find(r=>r.k===k)||{}; return `<tr><td>${esc(t)}</td><td>${['vat','gross','doc'].includes(a)?esc(x[a]||'—'):['km','days'].includes(a)?int(x[a]):detailRub(x[a])}</td></tr>`; }).join('')}</tbody></table></section>`);
@@ -586,7 +586,7 @@ PAGES.car = (k) => {
     grid: { left: 4, right: 8, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: css('--ink-2') } },
     tooltip: { trigger: 'axis', valueFormatter: v => v == null ? 'нет данных' : int(v) + NB + 'л' },
     xAxis: axisCat(fuel.map(x => ymShort(x[0]))), yAxis: axisVal(v => int(v)),
-    series: [{ name: 'Карта (РН + Е100)', type: 'bar', barGap: '15%', barWidth: '30%', itemStyle: { color: css('--s-2'), borderRadius: [4, 4, 0, 0] }, data: fuel.map(x => Math.round(x[1].rn + x[1].e100)) },
+    series: [{ name: 'Топливо, л', type: 'bar', barGap: '15%', barWidth: '30%', itemStyle: { color: css('--s-2'), borderRadius: [4, 4, 0, 0] }, data: fuel.map(x => Math.round(x[1].monthly_liters ?? (x[1].rn + x[1].e100))) },
              { name: 'ГЛОНАСС', type: 'bar', barWidth: '30%', itemStyle: { color: css('--s-up'), borderRadius: [4, 4, 0, 0] }, data: fuel.map(x => x[1].gl_days ? Math.round(x[1].gl) : null) }]
   });
   bindCal();
@@ -707,10 +707,19 @@ PAGES.fuel = () => {
   const controls = ROLE === 'admin' ? `<a class="btn" href="/api/fuel-template/${ym}" id="fuelTemplate">Скачать шаблон топлива</a><a class="btn" href="#/input">Загрузить заполненный файл</a>` : '';
   topbar('Топливо', {month: true, extra: controls});
   if (!D.fuel_month[ym]) {
-    $('#content').innerHTML = empty('Заправок за этот месяц пока нет', `Заполните литры по РН, Е100 и ГЛОНАСС в шаблоне топлива. ${ROLE === 'admin' ? 'Скачайте его кнопкой сверху и загрузите через «Загрузка и ввод».' : 'Шаблон скачивает и загружает владелец или бухгалтер через «Загрузка и ввод».'} Суммы в рублях вносятся отдельно в обычном шаблоне месяца.`, 'fuel');
+    $('#content').innerHTML = empty('Заправок за этот месяц пока нет', `Заполните общее количество литров за месяц напротив каждого автомобиля в шаблоне топлива. ${ROLE === 'admin' ? 'Скачайте его кнопкой сверху и загрузите через «Загрузка и ввод».' : 'Шаблон скачивает и загружает владелец или бухгалтер через «Загрузка и ввод».'} Суммы в рублях вносятся отдельно в обычном шаблоне месяца.`, 'fuel');
     return;
   }
   const fm = D.fuel_month[ym] || {};
+  if (Object.values(fm).some(f => f.monthly_liters != null)) {
+    const monthlyRows = Object.entries(fm).map(([k,f]) => ({k, liters: f.monthly_liters ?? (f.rn + f.e100)})).sort((a,b)=>name(a.k).localeCompare(name(b.k),'ru',{numeric:true}));
+    const total = monthlyRows.reduce((s,r)=>s+r.liters,0);
+    $('#content').innerHTML = `<div class="note">${ico('info')}<div>Топливо за ${ymLabel(ym).toLowerCase()}: общий объём за месяц по автомобилям, без разбивки по дням. Для добавления данных скачайте шаблон, заполните литры и загрузите через «Загрузка и ввод».</div></div>
+      <section class="kpis k4"><article class="card kpi"><div class="lbl">Топливо за месяц</div><div class="val">${dec(total,3)}<span class="u">л</span></div><div class="delta">Машин: ${monthlyRows.length}</div></article></section>
+      <div class="card" style="margin-top:14px"><div class="tbl-wrap"><table><thead><tr><th>Автомобиль</th><th>Госномер</th><th>Количество литров за месяц</th></tr></thead><tbody>${monthlyRows.map(r=>`<tr class="click" data-car="${esc(r.k)}"><td>${esc(name(r.k))}</td><td>${esc(V[r.k]?.plate || '—')}</td><td>${dec(r.liters,3)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Итого: ${monthlyRows.length} маш.</td><td></td><td>${dec(total,3)}</td></tr></tfoot></table></div></div>`;
+    bindCarRows();
+    return;
+  }
   const rows = Object.entries(fm).map(([k, f]) => { const card = f.rn + f.e100; const gl = f.gl_days ? f.gl : null; const diff = gl != null && gl > 0 ? (card - gl) / gl * 100 : null;
     return { k, card, rn: f.rn, e100: f.e100, gl, diff, anomaly: f.anomaly, flag: f.anomaly ? 'anom' : gl == null ? (card ? 'nogl' : '') : Math.abs(diff) > S.fuelPct ? 'over' : '' }; })
     .filter(r => r.card || r.gl).sort((a, b) => (b.flag === 'over') - (a.flag === 'over') || Math.abs(b.diff || 0) - Math.abs(a.diff || 0));
@@ -734,7 +743,7 @@ PAGES.fuel = () => {
     grid: { left: 4, right: 16, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: css('--ink-2') } },
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(127,127,127,.06)' } }, valueFormatter: v => int(v) + NB + 'л' },
     yAxis: axisCat(cs.map(r => name(r.k)), { inverse: true }), xAxis: axisVal(v => int(v)),
-    series: [{ name: 'Карта (РН + Е100)', type: 'bar', barWidth: 8, barGap: '25%', itemStyle: { color: css('--s-2'), borderRadius: [0, 4, 4, 0] }, data: cs.map(r => Math.round(r.card)) },
+    series: [{ name: 'Топливо, л', type: 'bar', barWidth: 8, barGap: '25%', itemStyle: { color: css('--s-2'), borderRadius: [0, 4, 4, 0] }, data: cs.map(r => Math.round(r.card)) },
              { name: 'ГЛОНАСС', type: 'bar', barWidth: 8, itemStyle: { color: css('--s-up'), borderRadius: [0, 4, 4, 0] }, data: cs.map(r => Math.round(r.gl)) }]
   });
   bindCarRows();

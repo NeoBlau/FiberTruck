@@ -198,6 +198,11 @@ class Ctx:
         plate = re.sub(r'\s+', '', str(raw).upper()).translate(str.maketrans('ABEKMHOPCTYX', 'АВЕКМНОРСТУХ'))
         if plate in self.by_plate:
             return self.by_plate[plate]
+        direct = re.fullmatch(r'0*(\d{1,3})\s*([МДФ]?)', str(raw).strip().upper())
+        if direct:
+            exact = str(int(direct.group(1))) + direct.group(2)
+            if exact in self.vehicles:
+                return self.vehicles[exact]
         key = parsing.car_key(raw)
         return self.vehicles.get(key) if key else None
 
@@ -1138,7 +1143,7 @@ def rollback_upload(db: Session, up: Upload, user: User) -> None:
         if v is not None:
             used = db.query(Operation).filter(Operation.vehicle_id == vid).count() + db.query(Mileage).filter(Mileage.vehicle_id == vid).count() \
                 + db.query(ScheduleMonth).filter(ScheduleMonth.vehicle_id == vid).count() + db.query(FuelDay).filter(FuelDay.vehicle_id == vid).count()
-            if used == 0:
+            if used == 0 and not v.edited:
                 db.delete(v)
     up.status, up.rolled_back_by, up.rolled_back_at = 'rolled_back', user.id, now()
     log(db, user, 'upload', f'№{up.id}', f'Откат загрузки «{up.filename}»', 'применена', 'откачена')

@@ -4,11 +4,12 @@ import re
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
 
 from ..audit import log
 from ..data import today, vehicle_dict
 from ..db import get_db
-from ..models import ReviewItem, User, Vehicle
+from ..models import ReviewItem, Upload, User, Vehicle
 from ..security import now, require_roles
 
 router = APIRouter(prefix='/api/vehicles', tags=['vehicles'])
@@ -29,7 +30,7 @@ def norm_plate(s: str | None) -> str | None:
 def short_key(s: str) -> tuple[str, str]:
     m = re.fullmatch(r'0*(\d{1,3})\s*([МДФ]?)', s.strip().upper())
     if not m:
-        raise HTTPException(422, {'field': 'short', 'msg': 'Номер из 1–3 цифр, при двойнике — буква М, Д или Ф'})
+        raise HTTPException(422, {'short': 'Номер из 1–3 цифр, при двойнике — буква М, Д или Ф'})
     key = str(int(m.group(1))) + m.group(2)
     name = str(int(m.group(1))).zfill(3) + (f' {m.group(2)}' if m.group(2) else '')
     return key, name
@@ -61,7 +62,7 @@ def validate(db: Session, data: dict, key: str) -> dict:
             'active': bool(data.get('active', True))}
 
 
-def apply(db: Session, v: Vehicle, clean: dict, user: User) -> int:
+def apply(db: Session, v: Vehicle, clean: dict, user: User, previous_name: str | None = None) -> int:
     cur = vehicle_dict(v)
     changes = 0
     for f, label in FIELDS.items():
@@ -82,7 +83,7 @@ def apply(db: Session, v: Vehicle, clean: dict, user: User) -> int:
         v.edited = True
     # машина получила госномер — пункт «без госномера» в очереди «Проверить» разобран
     if v.plate:
-        for r in db.scalars(select(ReviewItem).where(ReviewItem.kind == 'Машина без госномера', ReviewItem.value == v.name,
+        for r in db.scalars(select(ReviewItem).where(ReviewItem.kind == 'Машина без госномера', ReviewItem.value.in_([v.name, previous_name] if previous_name else [v.name]),
                                                      ReviewItem.resolved_at.is_(None))):
             r.resolved_at, r.resolved_by = now(), user.id
     return changes
@@ -113,12 +114,54 @@ def create(raw: dict, user: User = Depends(editors), db: Session = Depends(get_d
     return vehicle_dict(v)
 
 
+def discard_stale_previews(db: Session, vehicle_id: int, old_key: str, new_key: str) -> int:
+    """Applied uploads/backup snapshots remain untouched; key-based previews must be rebuilt."""
+    keys = {old_key, new_key}
+    count = 0
+    for up in db.scalars(select(Upload).where(Upload.status == 'parsed')):
+        plan = up.plan
+        affected = False
+        if up.kind == 'template':
+            affected = any(c.get('vehicle_id') == vehicle_id or c.get('key') in keys or (c.get('create') or {}).get('key') in keys
+                           for c in plan.get('cars', []))
+        elif up.kind == 'park':
+            affected = (any(c.get('id') == vehicle_id or c.get('create') in keys for c in plan.get('vehicles', [])) or
+                        any(r['k'] in keys for m in plan.get('schedule', []) for r in m['rows']) or
+                        any(r[0] in keys for m in plan.get('fuel', []) for r in m['days']))
+        if affected:
+            up.status = 'discarded'
+            up.preview = {**up.preview, 'can_apply': False,
+                          'discard_reason': 'Короткий номер автомобиля изменён. Загрузите файл повторно и проверьте новый предпросмотр.'}
+            count += 1
+    return count
+
+
 @router.patch('/{key}')
 def update(key: str, raw: dict, user: User = Depends(editors), db: Session = Depends(get_db)):
-    v = db.scalar(select(Vehicle).where(Vehicle.key == key))
+    v = db.scalar(select(Vehicle).where(Vehicle.key == key).with_for_update())
     if not v:
-        raise HTTPException(404, 'Машина не найдена')
-    clean = validate(db, body(raw), key)
-    apply(db, v, clean, user)
-    db.commit()
-    return vehicle_dict(v)
+        raise HTTPException(404, 'Машина не найдена. Возможно, её короткий номер уже изменён — обновите данные.')
+    new_key, new_name = short_key(str(raw['short'])) if 'short' in raw else (v.key, v.name)
+    if db.scalar(select(Vehicle.id).where(Vehicle.key == new_key, Vehicle.id != v.id)):
+        raise HTTPException(422, {'short': f'Машина {new_name} уже есть в справочнике'})
+    # PATCH preserves properties absent from the request, including dates and depreciation.
+    clean = validate(db, body({**vehicle_dict(v), **raw}), v.key)
+    discarded = 0
+    previous_name = v.name
+    if new_key != v.key:
+        old_key, old_name = v.key, v.name
+        discarded = discard_stale_previews(db, v.id, old_key, new_key)
+        v.key, v.name, v.edited = new_key, new_name, True
+        for review in db.scalars(select(ReviewItem).where(ReviewItem.kind == 'Машина без госномера',
+                                  ReviewItem.value == old_name, ReviewItem.resolved_at.is_(None))):
+            review.value = new_name
+        log(db, user, 'vehicle', new_name, 'Короткий номер', old_name, new_name)
+    apply(db, v, clean, user, previous_name=previous_name)
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        constraint = getattr(getattr(exc.orig, 'diag', None), 'constraint_name', '') or ''
+        field = 'plate' if 'plate' in constraint else 'short'
+        raise HTTPException(422, {field: 'Этот номер уже занят другой машиной. Обновите данные и выберите другой.'}) from None
+    return {**vehicle_dict(v), 'discarded_previews': discarded}

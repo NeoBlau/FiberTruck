@@ -93,7 +93,7 @@ def get_(upload_id: int, user: User = Depends(editors), db: Session = Depends(ge
 def apply(upload_id: int, user: User = Depends(editors), db: Session = Depends(get_db)):
     u = get_upload(db, upload_id, user)
     if u.status != 'parsed':
-        raise HTTPException(409, f'Загрузка уже {STATUS[u.status]}')
+        raise HTTPException(409, u.preview.get('discard_reason') or f'Загрузка уже {STATUS[u.status]}')
     if not u.preview.get('can_apply'):
         raise HTTPException(409, 'В этом файле нечего применять')
     try:
@@ -110,7 +110,7 @@ def apply(upload_id: int, user: User = Depends(editors), db: Session = Depends(g
 def discard(upload_id: int, user: User = Depends(editors), db: Session = Depends(get_db)):
     u = get_upload(db, upload_id, user)
     if u.status != 'parsed':
-        raise HTTPException(409, f'Загрузка уже {STATUS[u.status]}')
+        raise HTTPException(409, u.preview.get('discard_reason') or f'Загрузка уже {STATUS[u.status]}')
     u.status = 'discarded'
     db.commit()
     return {'ok': True}

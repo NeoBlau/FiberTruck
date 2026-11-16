@@ -1130,7 +1130,7 @@ function editCar(k) {
   const inp = (id, label, val, attrs = '') => `<label>${label}<input id="${id}" ${attrs} value="${esc(val ?? '')}"><span class="err" id="${id}-e"></span></label>`;
   $('#modal').innerHTML = `<div class="card modal fade" role="dialog" aria-modal="true" aria-labelledby="ct"><h2 id="ct">${isNew ? 'Новая машина' : 'Машина ' + esc(v.name)}</h2><p class="muted" style="margin:0">Изменения сразу видны во всех отчётах и попадают в журнал</p>
     <div class="form">
-      ${inp('f-short', 'Короткий номер', isNew ? '' : v.name, `type="text" placeholder="например, 885 или 308 М" ${isNew ? '' : 'disabled'}`)}
+      ${inp('f-short', 'Короткий номер', isNew ? '' : v.name, 'type="text" placeholder="например, 885 или 308 М"')}
       ${inp('f-plate', 'Госномер', v.plate, 'type="text" placeholder="Т970ОН58"')}
       <label>Марка<select class="inp" id="f-make"><option value="" ${v.make ? '' : 'selected'}>—</option>${MAKES.map(m => `<option ${v.make === m ? 'selected' : ''}>${m}</option>`).join('')}</select><span class="err" id="f-make-e"></span></label>
       ${inp('f-model', 'Модель', v.model, 'type="text" placeholder="FAW J7 EURO 6"')}
@@ -1152,14 +1152,15 @@ function editCar(k) {
     $$('.err', $('#modal')).forEach(e => e.textContent = '');
     let ok = true; const err = (id, t) => { $('#' + id + '-e').textContent = t; ok = false; };
     let key = k;
-    if (isNew) {
-      const m = /^0*(\d{1,3})\s*([МДФ]?)$/i.exec($('#f-short').value.trim().toUpperCase());
-      if (!m) err('f-short', 'Номер из 1–3 цифр, при двойнике — буква М, Д или Ф');
-      else { key = String(Number(m[1])) + (m[2] || ''); if (V[key]) err('f-short', `Машина ${displayKey(key)} уже есть в справочнике`); }
+    const m = /^0*(\d{1,3})\s*([МДФ]?)$/i.exec($('#f-short').value.trim().toUpperCase());
+    if (!m) err('f-short', 'Номер из 1–3 цифр, при двойнике — буква М, Д или Ф');
+    else {
+      key = String(Number(m[1])) + (m[2] || '');
+      if (key !== k && V[key]) err('f-short', `Машина ${displayKey(key)} уже есть в справочнике`);
     }
     const plate = normPlate($('#f-plate').value);
     if (plate && !PLATE_RE.test(plate)) err('f-plate', 'Формат: буква, 3 цифры, 2 буквы, регион — например Т970ОН58');
-    const dup = plate && Object.entries(V).find(([kk, vv]) => kk !== key && vv.plate === plate);
+    const dup = plate && Object.entries(V).find(([kk, vv]) => kk !== k && vv.plate === plate);
     if (dup) err('f-plate', `Этот госномер уже у машины ${dup[1].name}`);
     const year = $('#f-year').value ? Number($('#f-year').value) : null;
     if (year != null && (year < 1990 || year > TODAY.getFullYear() + 1)) err('f-year', `Год от 1990 до ${TODAY.getFullYear() + 1}`);
@@ -1170,10 +1171,17 @@ function editCar(k) {
     if (!ok) return;
     const payload = { plate: plate || null, make: $('#f-make').value || null, model: $('#f-model').value.trim() || null, year, amort, trailer: $('#f-trailer').value.trim() || null,
       trailer_model: $('#f-tmodel').value.trim() || null, from, to, active: $('#f-active').checked };
-    if (isNew) payload.short = $('#f-short').value;
+    payload.short = $('#f-short').value;
     $('#ms').disabled = true;
-    api(isNew ? '/api/vehicles' : `/api/vehicles/${encodeURIComponent(key)}`, { method: isNew ? 'POST' : 'PATCH', body: payload })
-      .then(async () => { close(); toast(isNew ? `Машина ${displayKey(key)} добавлена` : `${displayKey(key)}: сохранено`); await refresh(); })
+    api(isNew ? '/api/vehicles' : `/api/vehicles/${encodeURIComponent(k)}`, { method: isNew ? 'POST' : 'PATCH', body: payload })
+      .then(async result => {
+        close();
+        if (result.discarded_previews && UI.LAST_UPLOAD?.status === 'parsed') UI.LAST_UPLOAD = null;
+        if (!isNew && key !== k && [v.name, k].includes(FLEET_UI.q.trim())) FLEET_UI.q = '';
+        toast((isNew ? `Машина ${displayKey(key)} добавлена` : key !== k ? `Короткий номер: ${v.name} → ${displayKey(key)}. История сохранена.` : `${displayKey(key)}: сохранено`) +
+              (result.discarded_previews ? ' Файлы из предпросмотра загрузите повторно.' : ''));
+        await refresh();
+      })
       .catch(e => { $('#ms').disabled = false; showErrors(e, 'f-'); });
   };
 }

@@ -69,7 +69,7 @@ const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
 /* ---------- настройки (в рабочей версии — на сервере) ---------- */
-const DEFAULTS = { alloc: 'days', groups: [2013, 2017, 2021], fuelPct: 10, glonassMax: 1500, kmMin: 0, kmMax: 30000, lMin: 20, lMax: 45 };
+const DEFAULTS = { alloc: 'days', groups: [2013, 2017, 2021], fuelPct: 10, glonassMax: 1500, kmMin: 0, kmMax: 30000, lMin: 20, lMax: 45, fuelJumpPct: 20 };
 const S = Object.assign({}, DEFAULTS, D.settings || {});
 const ROLE = D.me.role;
 const INPUT = D.input || {};
@@ -116,7 +116,7 @@ const REP_YEAR = () => ((UI.STATE && UI.STATE.ym) || D.generated).slice(0, 4);
 const SCHED = Object.fromEntries(D.schedule.map(m => [m.ym, m]));
 const PROFIT_YMS = PROFIT_MONTHS.filter(hasProfit);
 const SCHED_YMS = D.schedule.map(m => m.ym);
-const ALL_YMS = [...new Set([...SCHED_YMS, ...PROFIT_YMS, ...Object.keys(D.periods || {}), ...Object.keys(INPUT), ...Object.keys(D.fuel_month || {})])].sort();
+const ALL_YMS = [...new Set([...SCHED_YMS, ...PROFIT_YMS, ...Object.keys(D.periods || {}), ...Object.keys(INPUT), ...Object.keys(D.fuel_month || {}), ...Object.keys(D.fuel_stats || {})])].sort();
 /* месяц по умолчанию: последний, где прибыль из таблицы или введено хотя бы по половине машин */
 const isComplete = ym => histMonth(ym) || finMonth(ym);
 const LAST_PROFIT = [...PROFIT_YMS].reverse().find(isComplete) || PROFIT_YMS[PROFIT_YMS.length - 1];
@@ -702,51 +702,61 @@ PAGES.years = () => {
 };
 
 /* ---------- Топливо ---------- */
+function fuelAnalytics(ym) {
+  const stats = D.fuel_stats?.[ym];
+  if (!stats?.rows.length) return;
+  const ranked = [...stats.rows].sort((a,b) => Number(b.flags.some(f=>f.severity==='alert')) - Number(a.flags.some(f=>f.severity==='alert')) || b.flags.length - a.flags.length || name(a.key).localeCompare(name(b.key),'ru',{numeric:true}));
+  const previous = prevYm(ym), yms = Object.keys(D.fuel_stats).filter(y=>y<=ym).sort().slice(-12);
+  const coverage = n => `${n} из ${stats.vehicles} машин`;
+  const limit = Number(S.lMax), jump = Number(S.fuelJumpPct || 20);
+  const rowsHtml = rows => rows.map(r=>`<tr class="click ${r.flags.some(f=>f.severity==='alert')?'lossrow':''}" data-car="${esc(r.key)}"><td><b>${esc(name(r.key))}</b><div class="plate">${esc(V[r.key]?.plate || '')}</div></td><td>${r.liters==null?'—':dec(r.liters,3)}</td><td>${int(r.km)}</td><td>${dec(r.rate,1)}</td><td>${dec(r.previous_rate,1)}</td><td>${r.change_pct==null?'—':(r.change_pct>0?'+':'')+pct(r.change_pct,1)}</td><td>${detailRub(r.cost)}</td><td>${r.cost_per_km==null?'—':dec(r.cost_per_km,2)}</td><td>${r.above_limit_liters>0?dec(r.above_limit_liters,1):'—'}</td><td class="l" style="white-space:normal;min-width:230px">${r.flags.length?r.flags.map(f=>`<span class="chip ${f.severity==='alert'?'neg':'warn'}" style="margin:2px">${esc(f.text)}</span>`).join(''):r.rate==null?'<span class="muted">Нет пробега для расчёта</span>':'<span class="ok">В пределах порогов</span>'}</td></tr>`).join('');
+  $('#content').innerHTML = `<div class="note">${ico('info')}<div>Литры — из топливного шаблона, пробег и расходы в рублях — из финансового шаблона за тот же месяц. Л/100 км рассчитаны по внесённым литрам и пробегу. Сигнал означает, что данные нужно проверить. Пороги: ${dec(S.lMin,1)}–${dec(limit,1)} л/100 км; рост к предыдущему месяцу — больше ${jump}%. ${ROLE==='admin'?'<a href="#/settings">Изменить пороги</a>':''}</div></div>
+    <section class="fuel-overview" style="margin-top:14px">
+      <article class="fuel-main-stat"><div class="fuel-eyebrow">Расход за месяц · ${ymLabel(ym)}</div><div class="fuel-main-value">${dec(stats.fleet_rate,1)} <span>л/100 км</span></div>
+        <p>Литры ÷ пробег × 100 — по сопоставимым машинам</p><div class="fuel-coverage">Рассчитано по ${coverage(stats.comparable_vehicles)}</div>
+        <small>${D.fuel_stats[previous]?.fleet_rate!=null?`Предыдущий месяц: ${dec(D.fuel_stats[previous].fleet_rate,1)} л/100 км · ${D.fuel_stats[previous].comparable_vehicles} машин`:'Для сравнения с прошлым месяцем нужны его литры и пробег'}</small></article>
+      <div class="fuel-summary-grid">
+        <article class="card fuel-summary-card"><span class="fuel-stat-icon">${ico('fuel')}</span><div class="lbl">Литров за месяц</div><div class="fuel-summary-value">${stats.total_liters==null?'—':stats.total_liters.toLocaleString('ru-RU',{maximumFractionDigits:3})}</div><p>Внесено: ${coverage(stats.liters_vehicles)}</p></article>
+        <article class="card fuel-summary-card"><span class="fuel-stat-icon">${ico('xls')}</span><div class="lbl">Расходы на топливо, с НДС</div><div class="fuel-summary-value">${rub(stats.total_cost)}</div><p>Суммы: ${coverage(stats.cost_vehicles)}</p></article>
+        <article class="card fuel-summary-card"><span class="fuel-stat-icon ${stats.review_vehicles?'fuel-attention':''}">${ico('review')}</span><div class="lbl">Требуют проверки</div><div class="fuel-summary-value">${stats.review_vehicles}</div><p>Выше порога: ${stats.high_rate_vehicles}<br>Без пробега: ${stats.missing_km_vehicles}</p></article>
+      </div>
+    </section>
+    <section class="g2" style="margin-top:14px">
+      <div class="card panel"><div class="panel-h"><div><h2>Топ-15 по литрам за месяц</h2><p>Все машины доступны в таблице ниже</p></div></div><div id="fuelVolumeChart" class="chart" style="height:340px"></div></div>
+      <div class="card panel"><div class="panel-h"><div><h2>Топ-15 по л/100 км</h2><p>Красным — выше ${dec(limit,1)}; без пробега показатель не рассчитывается</p></div></div><div id="fuelRateChart" class="chart" style="height:340px"></div></div>
+    </section>
+    <section class="card panel" style="margin-top:14px"><div class="panel-h"><div><h2>Топливо по месяцам</h2><p>До 12 месяцев. Число машин и полнота пробега показаны в подсказке</p></div></div><div id="fuelTrendChart" class="chart" style="height:240px"></div></section>
+    <section class="card panel" style="margin-top:14px"><div class="panel-h"><div><h2>Все автомобили: расход и сигналы</h2><p>Предыдущий месяц — ${ymLabel(previous).toLowerCase()}. «Сверх порога» = литры − пробег × ${dec(limit,1)} / 100</p></div><div class="spacer"></div><button class="pill ${UI.FUEL_FLAGS?'on':''}" id="fuelOnlyFlags">Только требующие проверки</button></div>
+      <div class="tbl-wrap"><table><thead><tr><th>Автомобиль</th><th>Литров за месяц</th><th>Пробег, км</th><th>Л/100 км</th><th>Л/100 км, прошлый месяц</th><th>Изменение</th><th>Топливо, ₽ с НДС</th><th>₽/км</th><th>Сверх порога, л</th><th class="l">Сигналы для проверки</th></tr></thead><tbody id="fuelStatsRows"></tbody></table></div><p class="muted" id="fuelStatsCount" style="margin:10px 0 0"></p></section>`;
+  function drawRows() {
+    const rows = UI.FUEL_FLAGS ? ranked.filter(r=>r.flags.length) : ranked;
+    $('#fuelStatsRows').innerHTML = rowsHtml(rows);
+    $('#fuelStatsCount').textContent = `Показано ${rows.length} из ${stats.vehicles} машин. Пустые показатели означают отсутствие данных, а не нулевой расход.`;
+    bindCarRows();
+  }
+  const legacy = Object.entries(D.fuel_month[ym] || {}).filter(([,f])=>f.monthly_liters==null && (f.card_days || f.gl_days || f.anomaly));
+  if (legacy.length) $('#content').insertAdjacentHTML('beforeend', `<details class="card panel" style="margin-top:14px"><summary>Сверка РН / Е100 / ГЛОНАСС из прежних файлов</summary><div class="tbl-wrap"><table><thead><tr><th>Автомобиль</th><th>РН, л</th><th>Е100, л</th><th>ГЛОНАСС, л</th><th>Расхождение</th><th>Проверка</th></tr></thead><tbody>${legacy.map(([k,f])=>{const card=f.rn+f.e100,delta=f.card_days&&f.gl_days&&f.gl>0?(card/f.gl-1)*100:null;return `<tr><td>${esc(name(k))}</td><td>${dec(f.rn,3)}</td><td>${dec(f.e100,3)}</td><td>${f.gl_days?dec(f.gl,3):'—'}</td><td>${pct(delta,1)}</td><td>${f.anomaly?'Проверьте суточные данные ГЛОНАСС':!f.card_days?'Нет данных по картам':delta!=null&&Math.abs(delta)>S.fuelPct?'Расхождение выше порога':f.gl_days?'В пределах порога':'Нет ГЛОНАСС'}</td></tr>`;}).join('')}</tbody></table></div></details>`);
+  $('#fuelOnlyFlags').onclick = e => { UI.FUEL_FLAGS=!UI.FUEL_FLAGS; e.target.classList.toggle('on',UI.FUEL_FLAGS); drawRows(); };
+  drawRows();
+  const volume = [...stats.rows].filter(r=>r.liters!=null).sort((a,b)=>b.liters-a.liters).slice(0,15);
+  const rates = [...stats.rows].filter(r=>r.rate!=null).sort((a,b)=>b.rate-a.rate).slice(0,15);
+  function bars(id, rows, field, rate=false) {
+    if (!rows.length) { $(id).innerHTML=empty(rate?'Нет пробега для расчёта':'Литры пока не внесены',rate?'Загрузите пробег за тот же месяц в финансовом шаблоне.':'Заполните месячный шаблон топлива.'); return; }
+    chart($(id),{grid:{left:4,right:35,top:12,bottom:6,containLabel:true},tooltip:{trigger:'axis',valueFormatter:v=>dec(v,rate?1:3)+(rate?' л/100 км':' л')},yAxis:axisCat(rows.map(r=>name(r.key)),{inverse:true}),xAxis:axisVal(v=>dec(v,rate?0:0)),series:[{type:'bar',barWidth:'60%',data:rows.map(r=>({value:r[field],itemStyle:{color:rate&&r.rate>limit?css('--neg'):css('--s-2'),borderRadius:[0,4,4,0]}})),...(rate?{markLine:{symbol:'none',label:{formatter:'Порог '+dec(limit,1)},data:[{xAxis:limit}],lineStyle:{color:css('--neg'),type:'dashed'}}}:{})}]});
+  }
+  bars('#fuelVolumeChart',volume,'liters'); bars('#fuelRateChart',rates,'rate',true);
+  chart($('#fuelTrendChart'),{grid:{left:8,right:40,top:35,bottom:8,containLabel:true},legend:{top:0,textStyle:{color:css('--ink-2')},data:['Литры','Л/100 км']},tooltip:{trigger:'axis',formatter:items=>{if (!items?.length) return '';const y=yms[items[0].dataIndex],s=D.fuel_stats[y];return `${ymLabel(y)}<br>Литры: ${dec(s.total_liters,3)} · ${s.liters_vehicles} из ${s.vehicles} машин<br>Л/100 км: ${dec(s.fleet_rate,1)} · сопоставимо ${s.comparable_vehicles} из ${s.vehicles}`;}},xAxis:axisCat(yms.map(ymShort)),yAxis:[axisVal(v=>short(v)),{...axisVal(v=>dec(v,0)),position:'right',splitLine:{show:false}}],series:[{name:'Литры',type:'bar',data:yms.map(y=>D.fuel_stats[y].total_liters),itemStyle:{color:css('--s-2')},barMaxWidth:36},{name:'Л/100 км',type:'line',yAxisIndex:1,data:yms.map(y=>D.fuel_stats[y].fleet_rate),connectNulls:false,itemStyle:{color:css('--s-up')}}]});
+}
+
 PAGES.fuel = () => {
   const ym = STATE.ym;
   const controls = ROLE === 'admin' ? `<a class="btn" href="/api/fuel-template/${ym}" id="fuelTemplate">Скачать шаблон топлива</a><a class="btn" href="#/input">Загрузить заполненный файл</a>` : '';
   topbar('Топливо', {month: true, extra: controls});
-  if (!D.fuel_month[ym]) {
-    $('#content').innerHTML = empty('Заправок за этот месяц пока нет', `Заполните общее количество литров за месяц напротив каждого автомобиля в шаблоне топлива. ${ROLE === 'admin' ? 'Скачайте его кнопкой сверху и загрузите через «Загрузка и ввод».' : 'Шаблон скачивает и загружает владелец или бухгалтер через «Загрузка и ввод».'} Суммы в рублях вносятся отдельно в обычном шаблоне месяца.`, 'fuel');
+  if (!D.fuel_stats?.[ym]?.rows.length) {
+    $('#content').innerHTML = empty('Данных о топливе за этот месяц пока нет', `Заполните месячные литры в топливном шаблоне. Пробег и расходы на топливо в рублях вносятся в финансовый шаблон за тот же месяц. ${ROLE === 'admin' ? 'Кнопки скачивания и загрузки — сверху.' : 'Данные вносит владелец или бухгалтер.'}`, 'fuel');
     return;
   }
-  const fm = D.fuel_month[ym] || {};
-  if (Object.values(fm).some(f => f.monthly_liters != null)) {
-    const monthlyRows = Object.entries(fm).map(([k,f]) => ({k, liters: f.monthly_liters ?? (f.rn + f.e100)})).sort((a,b)=>name(a.k).localeCompare(name(b.k),'ru',{numeric:true}));
-    const total = monthlyRows.reduce((s,r)=>s+r.liters,0);
-    $('#content').innerHTML = `<div class="note">${ico('info')}<div>Топливо за ${ymLabel(ym).toLowerCase()}: общий объём за месяц по автомобилям, без разбивки по дням. Для добавления данных скачайте шаблон, заполните литры и загрузите через «Загрузка и ввод».</div></div>
-      <section class="kpis k4"><article class="card kpi"><div class="lbl">Топливо за месяц</div><div class="val">${dec(total,3)}<span class="u">л</span></div><div class="delta">Машин: ${monthlyRows.length}</div></article></section>
-      <div class="card" style="margin-top:14px"><div class="tbl-wrap"><table><thead><tr><th>Автомобиль</th><th>Госномер</th><th>Количество литров за месяц</th></tr></thead><tbody>${monthlyRows.map(r=>`<tr class="click" data-car="${esc(r.k)}"><td>${esc(name(r.k))}</td><td>${esc(V[r.k]?.plate || '—')}</td><td>${dec(r.liters,3)}</td></tr>`).join('')}</tbody><tfoot><tr><td>Итого: ${monthlyRows.length} маш.</td><td></td><td>${dec(total,3)}</td></tr></tfoot></table></div></div>`;
-    bindCarRows();
-    return;
-  }
-  const rows = Object.entries(fm).map(([k, f]) => { const card = f.rn + f.e100; const gl = f.gl_days ? f.gl : null; const diff = gl != null && gl > 0 ? (card - gl) / gl * 100 : null;
-    return { k, card, rn: f.rn, e100: f.e100, gl, diff, anomaly: f.anomaly, flag: f.anomaly ? 'anom' : gl == null ? (card ? 'nogl' : '') : Math.abs(diff) > S.fuelPct ? 'over' : '' }; })
-    .filter(r => r.card || r.gl).sort((a, b) => (b.flag === 'over') - (a.flag === 'over') || Math.abs(b.diff || 0) - Math.abs(a.diff || 0));
-  const totCard = rows.reduce((s, r) => s + r.card, 0), cmp = rows.filter(r => r.gl != null && !r.anomaly);
-  const over = rows.filter(r => r.flag === 'over').length;
-  const flagHtml = r => r.flag === 'over' ? `<span class="chip neg">${r.diff > 0 ? 'карта больше' : 'ГЛОНАСС больше'}</span>` : r.flag === 'anom' ? `<span class="chip warn" title="В ГЛОНАСС за сутки больше ${S.glonassMax} л — похоже, внесены километры">проверить ГЛОНАСС</span>` : r.flag === 'nogl' ? '<span class="chip">нет ГЛОНАСС</span>' : '<span class="ok">в норме</span>';
-  $('#content').innerHTML = `<div class="note">${ico('info')}<div>Данные — из шаблона топлива или листа «Анализ ЗАПРАВОК» (литры, ${ymLabel(ym).toLowerCase()}). Сумм в рублях и пробега там нет, поэтому л/100 км и руб/км требуют отдельных данных о пробеге и расходах в рублях. Порог расхождения — ${S.fuelPct}%${ROLE === 'admin' ? ', меняется в <a href="#/settings" style="color:var(--teal-ink)">настройках</a>' : ''}.</div></div>
-    <section class="kpis k4">
-      <article class="card kpi"><div class="lbl">Заправлено по картам</div><div class="val">${int(totCard)}<span class="u">л</span></div><div class="delta">${rows.length} машин</div></article>
-      <article class="card kpi"><div class="lbl">Сравнимо с ГЛОНАСС</div><div class="val">${cmp.length}<span class="u">маш.</span></div><div class="delta">у остальных нет данных ГЛОНАСС</div></article>
-      <article class="card kpi"><div class="lbl">Расхождение больше ${S.fuelPct}%</div><div class="val ${over ? 'neg-ink' : ''}">${over}<span class="u">маш.</span></div><div class="delta">карта против ГЛОНАСС</div></article>
-      <article class="card kpi"><div class="lbl">Подозрительные данные</div><div class="val">${rows.filter(r => r.anomaly).length}<span class="u">маш.</span></div><div class="delta">ГЛОНАСС больше ${S.glonassMax} л в сутки</div></article>
-    </section>
-    <section class="g21" style="margin-top:14px">
-      <div class="card panel"><div class="panel-h"><div><h2>Карта против ГЛОНАСС</h2><p>литры за месяц, машины с данными ГЛОНАСС</p></div></div><div id="fc" class="chart" style="height:${Math.max(260, cmp.length * 26)}px"></div></div>
-      <div class="card"><div class="tbl-wrap" style="max-height:${Math.max(330, cmp.length * 26 + 70)}px"><table><thead><tr><th>Машина</th><th>РН, л</th><th class="col-m">Е100, л</th><th>ГЛОНАСС, л</th><th>Разница</th><th></th></tr></thead>
-        <tbody>${rows.map(r => `<tr class="click" data-car="${r.k}"><td><span class="car">${name(r.k)}</span></td><td>${dec(r.rn, 3)}</td><td class="col-m">${r.e100 ? dec(r.e100, 3) : '—'}</td><td>${r.gl == null ? '—' : dec(r.gl, 3)}</td><td class="${r.flag === 'over' ? 'neg-ink' : ''}">${r.diff == null ? '—' : (r.diff > 0 ? '+' : '') + pct(r.diff, 0)}</td><td>${flagHtml(r)}</td></tr>`).join('')}</tbody></table></div></div>
-    </section>`;
-  const cs = cmp.slice().sort((a, b) => b.card - a.card);
-  if (cs.length) chart($('#fc'), {
-    grid: { left: 4, right: 16, top: 30, bottom: 4, containLabel: true }, legend: { top: 0, left: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: css('--ink-2') } },
-    tooltip: { trigger: 'axis', axisPointer: { type: 'shadow', shadowStyle: { color: 'rgba(127,127,127,.06)' } }, valueFormatter: v => int(v) + NB + 'л' },
-    yAxis: axisCat(cs.map(r => name(r.k)), { inverse: true }), xAxis: axisVal(v => int(v)),
-    series: [{ name: 'Топливо, л', type: 'bar', barWidth: 8, barGap: '25%', itemStyle: { color: css('--s-2'), borderRadius: [0, 4, 4, 0] }, data: cs.map(r => Math.round(r.card)) },
-             { name: 'ГЛОНАСС', type: 'bar', barWidth: 8, itemStyle: { color: css('--s-up'), borderRadius: [0, 4, 4, 0] }, data: cs.map(r => Math.round(r.gl)) }]
-  });
-  bindCarRows();
+  fuelAnalytics(ym);
 };
 
 /* ---------- Динамика ---------- */
@@ -1196,7 +1206,7 @@ PAGES.settings = () => {
       <div class="form" style="grid-template-columns:repeat(3,1fr);margin-top:0">${S.groups.map((g, i) => `<label>Граница ${i + 1}<input type="number" data-g="${i}" value="${g}" min="2000" max="2030"></label>`).join('')}</div></div>
     <div class="card panel"><div class="panel-h"><div><h2>Топливо</h2></div></div>
       <div class="form" style="margin-top:0"><label>Порог расхождения карта/ГЛОНАСС, %<input type="number" id="fp" value="${S.fuelPct}" min="1" max="100"></label><label>ГЛОНАСС: максимум литров в сутки<input type="number" id="gm" value="${S.glonassMax}"></label>
-        <label>Расход: минимум, л/100 км<input type="number" id="lmin" value="${S.lMin}"></label><label>Расход: максимум, л/100 км<input type="number" id="lmax" value="${S.lMax}"></label></div></div>
+        <label>Рост л/100 км к прошлому месяцу, %<input type="number" id="fj" value="${S.fuelJumpPct}" min="1" max="1000"></label><label>Расход: минимум, л/100 км<input type="number" id="lmin" value="${S.lMin}"></label><label>Расход: максимум, л/100 км<input type="number" id="lmax" value="${S.lMax}"></label></div></div>
     <div class="card panel"><div class="panel-h"><div><h2>Пробег за месяц</h2></div></div>
       <div class="form" style="margin-top:0"><label>Минимум, км<input type="number" id="kmin" value="${S.kmMin}"></label><label>Максимум, км<input type="number" id="kmax" value="${S.kmMax}"></label></div></div>
     <div class="card panel"><div class="panel-h"><div><h2>Ставки НДС</h2></div></div><div style="display:flex;gap:8px;flex-wrap:wrap">${['22%', '10%', '7%', '5%', '0%', 'без НДС'].map(v => `<span class="chip">${v}</span>`).join('')}</div></div>
@@ -1205,11 +1215,12 @@ PAGES.settings = () => {
   </div><div style="margin-top:14px;display:flex;gap:8px"><button class="btn primary" id="save">Сохранить</button><button class="btn" id="reset">Сбросить</button></div>`;
   $('#content').insertAdjacentHTML('beforeend', `<section class="card panel" style="margin-top:14px"><h2>Полное резервное копирование</h2><p>Вся база, пользователи, настройки, журнал, загруженные Excel и код программы. В архиве есть инструкция восстановления. Конфигурацию сервера .env сохраните отдельно.</p><a class="btn primary" href="/api/backup" id="downloadBackup">Скачать полный резервный архив ZIP</a></section>`);
   $('#save').onclick = () => {
-    S.alloc = ($('input[name=alloc]:checked') || {}).value || 'days';
-    S.groups = $$('[data-g]').map(i => Number(i.value)).sort((a, b) => a - b);
-    S.fuelPct = Number($('#fp').value) || 10; S.glonassMax = Number($('#gm').value) || 1500; S.lMin = Number($('#lmin').value); S.lMax = Number($('#lmax').value);
-    S.kmMin = Number($('#kmin').value); S.kmMax = Number($('#kmax').value);
-    api('/api/settings', { method: 'PUT', body: S }).then(async () => { toast('Настройки сохранены'); await refresh(); }).catch(e => toast(e.message));
+    const updated = {...S};
+    updated.alloc = ($('input[name=alloc]:checked') || {}).value || 'days';
+    updated.groups = $$('[data-g]').map(i => Number(i.value)).sort((a, b) => a - b);
+    updated.fuelJumpPct = Number($('#fj').value); updated.fuelPct = Number($('#fp').value) || 10; updated.glonassMax = Number($('#gm').value) || 1500; updated.lMin = Number($('#lmin').value); updated.lMax = Number($('#lmax').value);
+    updated.kmMin = Number($('#kmin').value); updated.kmMax = Number($('#kmax').value);
+    api('/api/settings', { method: 'PUT', body: updated }).then(async () => { toast('Настройки сохранены'); await refresh(); }).catch(e => toast(e.message));
   };
   $('#reset').onclick = () => api('/api/settings', { method: 'PUT', body: DEFAULTS }).then(async () => { toast('Настройки сброшены'); await refresh(); }).catch(e => toast(e.message));
 };

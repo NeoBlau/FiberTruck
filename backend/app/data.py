@@ -12,11 +12,12 @@ from sqlalchemy.orm import Session
 
 from .config import settings as cfg
 from .fleet import month_vehicle_map
+from .fuel_stats import build_fuel_statistics
 from .models import (AuditLog, FleetDaysHistory, FuelDay, Mileage, Operation, Period, ReferenceValue, ReviewItem,
                      ScheduleMonth, Setting, Upload, User, Vehicle)
 
 DEFAULT_UI_SETTINGS = {'alloc': 'days', 'groups': [2013, 2017, 2021], 'fuelPct': 10, 'glonassMax': 1500,
-                       'kmMin': 0, 'kmMax': 30000, 'lMin': 20, 'lMax': 45}
+                       'kmMin': 0, 'kmMax': 30000, 'lMin': 20, 'lMax': 45, 'fuelJumpPct': 20}
 ANALYTICS_ROLES = ('admin', 'viewer')
 SHARED = {'shared_tractor': 'tractor', 'shared_gen': 'gen', 'shared_service': 'service', 'shared_amort': 'amort'}
 
@@ -107,7 +108,7 @@ def build_payload(db: Session, user: User) -> dict:
                   for a in db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(300))][::-1],
         'input': input_entries(db, keys, list(periods) if analytics else open_yms),
         # аналитика — только владельцу и руководителю
-        'profit': {}, 'shared': {}, 'bench': {}, 'fuel_month': {}, 'idle_hist': {}, 'textdic': [], 'fin': {}, 'km': {}, 'wdays': {}, 'profit_months': [],
+        'profit': {}, 'shared': {}, 'bench': {}, 'fuel_month': {}, 'idle_hist': {}, 'textdic': [], 'fin': {}, 'km': {}, 'wdays': {}, 'profit_months': [], 'fuel_stats': {},
     }
 
     sched = defaultdict(list)
@@ -198,5 +199,6 @@ def build_payload(db: Session, user: User) -> dict:
             e['gl'] += gl
             e['gl_days'] += 1
     out['fuel_month'] = {ym: dict(v) for ym, v in fm.items()}
+    out['fuel_stats'] = build_fuel_statistics(out['fuel_month'], out['km'], out['fin'], s)
     out['idle_hist'] = {h.ym: [h.worked, h.no_driver, h.idle, h.planned, h.unplanned] for h in db.scalars(select(FleetDaysHistory))}
     return out

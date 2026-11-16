@@ -310,3 +310,20 @@ input:focus,select:focus,button:focus-visible{outline:2px solid color-mix(in srg
 .table-scroll-track::-webkit-scrollbar{height:14px}
 .table-scroll-track::-webkit-scrollbar-track{background:var(--surface-2);border-radius:7px}
 .table-scroll-track::-webkit-scrollbar-thumb{background:var(--ink-3);border:2px solid var(--surface-2);border-radius:7px}
+
+/* Monthly fuel overview: primary normalized metric with visible data coverage. */
+.fuel-overview{display:grid;grid-template-columns:minmax(260px,1fr) minmax(0,2fr);gap:14px}
+.fuel-main-stat{background:linear-gradient(125deg,#0B1F3A,#143C50);color:#fff;border-radius:var(--radius);padding:24px;display:flex;flex-direction:column;align-items:flex-start;gap:10px;box-shadow:var(--shadow)}
+.fuel-eyebrow{font-size:12px;letter-spacing:.02em;color:#B8D4DF}
+.fuel-main-value{font-size:46px;font-weight:650;letter-spacing:-.04em;line-height:1.15;font-variant-numeric:tabular-nums}
+.fuel-main-value span{font-size:17px;font-weight:400;letter-spacing:0;color:#86E4D3;white-space:nowrap}
+.fuel-main-stat p{font-size:12px;color:#C4D7E2;margin:0}.fuel-main-stat small{color:#ACC6D2;line-height:1.5}
+.fuel-coverage{font-size:12px;padding:5px 9px;border:1px solid #557588;border-radius:6px;background:#ffffff0a}
+.fuel-summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}
+.fuel-summary-card{padding:20px;display:flex;flex-direction:column;align-items:flex-start;gap:12px;min-width:0}
+.fuel-stat-icon{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:10px;color:#087D71;background:#E7F7F2}.fuel-attention{color:#AB5D09;background:#FFF3DF}
+.fuel-summary-card .lbl{font-size:12px;color:var(--ink-2)}.fuel-summary-value{font-size:25px;font-weight:650;line-height:1.15;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.fuel-summary-card p{font-size:11px;line-height:1.5;color:var(--ink-3);margin:0}
+@media(max-width:1100px){.fuel-overview{grid-template-columns:1fr}.fuel-main-stat{padding:20px}.fuel-main-value{font-size:40px}}
+@media(max-width:620px){.fuel-summary-grid{grid-template-columns:1fr}.fuel-summary-card{padding:16px}.fuel-summary-value{font-size:24px}}
+@media print{.fuel-main-stat{background:#fff;color:#0B1F3A;border:1px solid #D9E0E8}.fuel-main-stat *{color:#0B1F3A!important}}

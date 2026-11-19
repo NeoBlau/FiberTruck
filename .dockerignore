@@ -15,3 +15,5 @@ backend/uploads/
 .credentials
 **/node_modules
 docs/screens/
+
+**/*.ftkey

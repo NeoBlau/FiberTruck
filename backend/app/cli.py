@@ -3,6 +3,7 @@
   python -m app.cli init-users [--reset]     создать владельца, руководителя и бухгалтера со случайными паролями
   python -m app.cli create-user <логин> <роль: admin|viewer|input> "<Имя>"   (пароль спросит)
   python -m app.cli import-history <прибыль.xlsx> <парк.xlsx>
+  python -m app.cli reviewed-package [--apply|--rollback] [--key-stdin]
 """
 import getpass
 import os
@@ -64,6 +65,26 @@ def init_users(reset: bool = False) -> list[tuple[str, str, str, str | None]]:
 
 
 def main(argv: list[str]) -> None:
+    if argv and argv[0] == 'reviewed-package':
+        import argparse
+        import json
+        from .reviewed_package import DEFAULT_PACKAGE, process_package
+        from .uploads import UploadError
+        parser = argparse.ArgumentParser(description='Проверенный зашифрованный пакет Excel. Без --apply только проверка.')
+        parser.add_argument('--package', default=str(DEFAULT_PACKAGE))
+        parser.add_argument('--key-stdin', action='store_true')
+        modes = parser.add_mutually_exclusive_group()
+        modes.add_argument('--apply', action='store_true')
+        modes.add_argument('--rollback', action='store_true')
+        parser.add_argument('--actor-login')
+        args = parser.parse_args(argv[1:])
+        key = sys.stdin.readline().strip() if args.key_stdin else getpass.getpass('Ключ пакета (ввод не отображается): ').strip()
+        try:
+            report = process_package(args.package, key, apply=args.apply, rollback=args.rollback, actor_login=args.actor_login)
+        except (UploadError, OSError) as exc:
+            sys.exit(f'Пакет не применён: {exc}')
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return
     if argv and argv[0] == 'init-users':
         rows = init_users(reset='--reset' in argv)
         print('Пользователи FiberTrack (пароли показываются один раз — сохраните их):')

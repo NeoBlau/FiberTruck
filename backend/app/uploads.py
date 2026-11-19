@@ -321,11 +321,26 @@ def build_fuel_template(db: Session, ym: str, keys: list[str]) -> openpyxl.Workb
     return wb
 
 
+
+def check_template_month(wb, sheet, ym):
+    """A renamed visible month must never silently import into the old hidden month."""
+    if not re.fullmatch(r'20\d\d-(0[1-9]|1[0-2])', ym):
+        raise UploadError('В шаблоне неверный служебный месяц. Скачайте шаблон нужного месяца заново.')
+    visible = label_to_ym(sheet['A1'].value)
+    if visible and visible != ym:
+        raise UploadError(
+            f'Месяц в заголовке ({ym_label(visible)}) не совпадает со служебным месяцем шаблона ({ym_label(ym)}). '
+            'Одного изменения названия файла или заголовка недостаточно. '
+            'Скачайте шаблон нужного месяца и перенесите в него заполненные данные. Ничего не применено.'
+        )
+
+
 def parse_monthly_fuel_template(ctx: Ctx, wb):
     ym = str(wb['_ft_fuel']['A2'].value or '')
     if not re.fullmatch(r'20\d\d-(0[1-9]|1[0-2])', ym):
         raise UploadError('В топливном шаблоне не указан месяц. Скачайте шаблон заново.')
     ws = wb['Анализ ЗАПРАВОК']
+    check_template_month(wb, ws, ym)
     if [ws.cell(2, c).value for c in (1, 2)] != ['Автомобиль', 'Количество литров за месяц']:
         raise UploadError('Не меняйте заголовки месячного топливного шаблона.')
     monthly = defaultdict(dict)
@@ -354,6 +369,7 @@ def parse_fuel_template(ctx: Ctx, wb):
     if not re.fullmatch(r'20\d\d-(0[1-9]|1[0-2])', ym):
         raise UploadError('В топливном шаблоне не указан месяц. Скачайте шаблон заново.')
     ws = wb['Анализ ЗАПРАВОК']
+    check_template_month(wb, ws, ym)
     if [ws.cell(2, c).value for c in range(1, 7)] != ['Дата', 'Машина', 'Госномер', 'РН, л', 'Е100, л', 'ГЛОНАСС, л']:
         raise UploadError('Не меняйте заголовки топливного шаблона. Скачайте его заново.')
     daily = defaultdict(dict)
@@ -494,6 +510,8 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
     ym = None
     if '_ft' in wb.sheetnames:
         ym = str(wb['_ft']['A2'].value or '') or None
+    if ym:
+        check_template_month(wb, ws, ym)
     ym = ym or label_to_ym(ws['A1'].value) or label_to_ym(ws.title) or chosen_ym
     if not ym:
         raise UploadError('В шаблоне не указан месяц. Скачайте шаблон заново кнопкой «Скачать шаблон на месяц».')

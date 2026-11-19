@@ -45,6 +45,23 @@ for i in $(seq 1 60); do
   [ "$i" = 60 ] && die "FiberTrack не ответил за 2 минуты: ${COMPOSE[*]} logs backend"
   sleep 2
 done
+if [ "${FT_IMPORT_REVIEWED_BUNDLE:-0}" = 1 ]; then
+  say "Проверенный пакет: замена данных только перечисленных машин и общих строк за месяцы пакета"
+  echo "  Прежние значения сохраняются для отката. Другие месяцы и неперечисленные машины не меняются."
+  if [ -n "${FT_BUNDLE_KEY_FILE:-}" ]; then
+    [ -f "$FT_BUNDLE_KEY_FILE" ] || die "Не найден файл ключа пакета. Код обновлён; импорт не запущен."
+    IFS= read -r FT_PACKAGE_SECRET < "$FT_BUNDLE_KEY_FILE"
+  else
+    [ -t 0 ] || die "Для импорта нужен терминал или FT_BUNDLE_KEY_FILE. Код обновлён; импорт не запущен."
+    IFS= read -r -s -p 'Ключ пакета (ввод не отображается): ' FT_PACKAGE_SECRET
+    printf '\n'
+  fi
+  if ! printf '%s\n' "$FT_PACKAGE_SECRET" | "${COMPOSE[@]}" exec -T backend python -m app.cli reviewed-package --key-stdin --apply; then
+    unset FT_PACKAGE_SECRET
+    die "Код обновлён, пакет не применён. Изменения импорта отменены; резервная копия: $BACKUP_DIR"
+  fi
+  unset FT_PACKAGE_SECRET
+fi
 echo "  версия базы: $("${COMPOSE[@]}" exec -T backend alembic current 2>/dev/null | tail -1)"
 [ -d .git ] && echo "  версия кода: $(git log -1 --format='%h от %cd' --date=format:'%d.%m.%Y %H:%M')"
 printf '\n\033[1;32mГотово — FiberTrack обновлён.\033[0m\n'

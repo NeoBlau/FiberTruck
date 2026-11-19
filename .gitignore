@@ -22,3 +22,6 @@ backend/uploads/
 # Local verification tools, before snapshots and generated downloads
 .tools/
 artifacts/
+
+# Private import keys are never distributed with encrypted data
+*.ftkey

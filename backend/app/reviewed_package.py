@@ -71,8 +71,6 @@ def open_package(path, key):
                     raise ValueError
                 result.append({**f, 'data': raw, 'superseded': stale})
             months = sorted({ym for ym, _ in pairs})
-            if any((ym, 'financial') in pairs and (ym, 'fuel') not in pairs for ym in months):
-                raise ValueError
             return manifest['id'], sorted(result, key=lambda f: (f['ym'], f['kind'] != 'financial'))
     except (InvalidToken, ValueError, KeyError, TypeError, zipfile.BadZipFile, json.JSONDecodeError):
         raise UploadError('Неверный ключ, повреждённый или неподдерживаемый пакет. Данные не изменены.') from None

@@ -169,3 +169,29 @@ def test_fuel_only_patch_preserves_finance_and_other_vehicles(tmp_path, monkeypa
         assert db.scalar(select(FuelDay.rn_l).where(FuelDay.vehicle_id == ids['409'], FuelDay.date == dt.date(2026, 8, 1))) == 750
     process_package(path, key, rollback=True)
     assert snapshot() == before
+
+
+def test_financial_only_single_vehicle_preserves_fuel_and_other_finance(tmp_path, monkeypatch):
+    from app.reviewed_package import open_package
+    original, key = package(tmp_path, monkeypatch)
+    _, files = open_package(original, key)
+    wb = openpyxl.load_workbook(io.BytesIO(files[0]['data']))
+    sheet = wb.active
+    for row in range(sheet.max_row, 2, -1):
+        if str(sheet.cell(row, 1).value) != '885':
+            sheet.delete_rows(row)
+    path = tmp_path / 'financial-only.ftpack'
+    path.write_bytes(seal_package([('financial', '2026-08', 'Одна машина.xlsx', save(wb))], key))
+    seed_previous()
+    before = snapshot()
+    process_package(path, key, apply=True)
+    after = snapshot()
+    assert after['fuel_days'] == before['fuel_days']
+    assert after['users'] == before['users']
+    assert after['periods'] == before['periods']
+    with SessionLocal() as db:
+        vid = db.scalar(select(Vehicle.id).where(Vehicle.key == '885'))
+        assert db.scalar(select(Mileage.km).where(Mileage.vehicle_id == vid, Mileage.ym == '2026-08')) == 10000
+    assert [r for r in after['operations'] if r['vehicle_id'] != vid] == [r for r in before['operations'] if r['vehicle_id'] != vid]
+    process_package(path, key, rollback=True)
+    assert snapshot() == before

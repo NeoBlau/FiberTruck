@@ -53,7 +53,7 @@ def open_package(path, key):
             if manifest.get('version') != 1 or manifest.get('mode') != 'replace-listed' or not re.fullmatch(r'[a-f0-9]{32}', manifest.get('id', '')):
                 raise ValueError
             files = manifest['files']
-            if not 2 <= len(files) <= 24 or len({f['entry'] for f in files}) != len(files):
+            if not 1 <= len(files) <= 24 or len({f['entry'] for f in files}) != len(files):
                 raise ValueError
             pairs = set()
             result = []
@@ -71,7 +71,7 @@ def open_package(path, key):
                     raise ValueError
                 result.append({**f, 'data': raw, 'superseded': stale})
             months = sorted({ym for ym, _ in pairs})
-            if pairs != {(ym, kind) for ym in months for kind in ('financial', 'fuel')}:
+            if any((ym, 'financial') in pairs and (ym, 'fuel') not in pairs for ym in months):
                 raise ValueError
             return manifest['id'], sorted(result, key=lambda f: (f['ym'], f['kind'] != 'financial'))
     except (InvalidToken, ValueError, KeyError, TypeError, zipfile.BadZipFile, json.JSONDecodeError):
@@ -172,9 +172,13 @@ def process_package(path, key, *, apply=False, rollback=False, actor_login=None)
                                 name = wb.active.cell(row, 1).value
                                 if name is None:
                                     continue
-                                key = aliases[ym].get(str(name).strip())
+                                if ym in aliases:
+                                    key = aliases[ym].get(str(name).strip())
+                                else:
+                                    existing = Ctx(db).find_vehicle(name)
+                                    key = existing.key if existing else None
                                 if key is None:
-                                    raise UploadError(f'Топливо {ym}: машина {name} отсутствует в финансовом файле.')
+                                    raise UploadError(f'Топливо {ym}: машина {name} не найдена. Нужен финансовый файл или запись в справочнике.')
                                 vehicle = db.scalar(select(Vehicle).where(Vehicle.key == key))
                                 scope.append(vehicle.id)
                                 wb.active.cell(row, 1).value = key

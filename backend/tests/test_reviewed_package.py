@@ -142,3 +142,30 @@ def test_financial_hidden_month_mismatch_or_invalid_metadata_is_rejected(hidden,
     w.active['A1'] = f'FiberTrack · шаблон ввода · {visible}'
     r = c.post('/api/uploads', files={'file': ('finance.xlsx', save(w))})
     assert r.status_code == 422
+
+
+def test_fuel_only_patch_preserves_finance_and_other_vehicles(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, 'upload_dir', str(tmp_path / 'uploads'))
+    c = login('admin')
+    fuel = openpyxl.load_workbook(io.BytesIO(c.get('/api/fuel-template/2026-08').content))
+    sheet = fuel.active
+    for row in range(sheet.max_row, 2, -1):
+        if str(sheet.cell(row, 1).value) != '885':
+            sheet.delete_rows(row)
+    sheet['B3'] = 1900
+    seed_previous()
+    before = snapshot()
+    key = Fernet.generate_key()
+    path = tmp_path / 'fuel-only.ftpack'
+    path.write_bytes(seal_package([('fuel', '2026-08', 'Исправления.xlsx', save(fuel))], key))
+    process_package(path, key, apply=True)
+    after = snapshot()
+    for table in before:
+        if table != 'fuel_days':
+            assert after[table] == before[table]
+    with SessionLocal() as db:
+        ids = {v.key: v.id for v in db.scalars(select(Vehicle))}
+        assert db.scalar(select(FuelDay.rn_l).where(FuelDay.vehicle_id == ids['885'], FuelDay.date == dt.date(2026, 8, 1))) == 1900
+        assert db.scalar(select(FuelDay.rn_l).where(FuelDay.vehicle_id == ids['409'], FuelDay.date == dt.date(2026, 8, 1))) == 750
+    process_package(path, key, rollback=True)
+    assert snapshot() == before

@@ -195,3 +195,24 @@ def test_financial_only_single_vehicle_preserves_fuel_and_other_finance(tmp_path
     assert [r for r in after['operations'] if r['vehicle_id'] != vid] == [r for r in before['operations'] if r['vehicle_id'] != vid]
     process_package(path, key, rollback=True)
     assert snapshot() == before
+
+
+def test_fuel_formula_cached_value_survives_package_normalization(tmp_path, monkeypatch):
+    import zipfile
+    from app.reviewed_package import open_package
+    original, key = package(tmp_path, monkeypatch)
+    _, files = open_package(original, key)
+    raw = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(files[1]['data'])) as src, zipfile.ZipFile(raw, 'w') as dst:
+        for info in src.infolist():
+            data = src.read(info.filename)
+            if info.filename == 'xl/worksheets/sheet1.xml':
+                assert data.count(b'<v>3000</v>') == 1
+                data = data.replace(b'<v>3000</v>', b'<f>1500+1500</f><v>3000</v>')
+            dst.writestr(info, data)
+    path = tmp_path / 'formula.ftpack'
+    path.write_bytes(seal_package([('fuel', '2026-08', 'Формула.xlsx', raw.getvalue())], key))
+    process_package(path, key, apply=True)
+    with SessionLocal() as db:
+        vid = db.scalar(select(Vehicle.id).where(Vehicle.key == '885'))
+        assert db.scalar(select(FuelDay.rn_l).where(FuelDay.vehicle_id == vid, FuelDay.date == dt.date(2026, 8, 1))) == 3000

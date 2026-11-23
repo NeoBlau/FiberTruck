@@ -155,7 +155,8 @@ def process_package(path, key, *, apply=False, rollback=False, actor_login=None)
                 with tempfile.TemporaryDirectory(prefix='ft-review-') as temp:
                     for i, f in enumerate(files):
                         ym = f['ym']
-                        wb = openpyxl.load_workbook(io.BytesIO(f['data']))
+                        # Fuel normalization must freeze cached formula results before saving.
+                        wb = openpyxl.load_workbook(io.BytesIO(f['data']), data_only=f['kind'] == 'fuel')
                         if f['kind'] == 'financial':
                             declared = str(wb['_ft']['A2'].value) if '_ft' in wb.sheetnames else label_to_ym(wb.active['A1'].value)
                             if declared != ym:

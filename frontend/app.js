@@ -37,7 +37,7 @@ async function refresh(quiet = false) {
 }
 function syncViewingScreen() {
   const page = location.hash.replace(/^#\/?/, '').split('/')[0] || 'dashboard';
-  if (!app || document.hidden || !['dashboard','cars','car','heatmap','fuel','years','dynamics','recon','report'].includes(page) ||
+  if (!app || document.hidden || !['dashboard','cars','car','heatmap','fuel','years','dynamics','recon','report','analytics'].includes(page) ||
       document.querySelector('#modal.open') || ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) return;
   refresh(true).catch(e => { const button = document.getElementById('refreshData'); if (button) button.title = e.message; });
 }
@@ -246,6 +246,7 @@ const ico = (n, sz = 16) => `<svg width="${sz}" height="${sz}" viewBox="0 0 16 1
 
 const NAV = [
   ['dashboard', 'Дашборд', 'dash', ['admin','viewer']],
+  ['analytics', 'Аналитика за всё время', 'dyn', ['admin','viewer']],
   ['cars', 'Машины', 'truck', ['admin','viewer']],
   ['heatmap', 'Тепловая карта', 'heat', ['admin','viewer']],
   ['fuel', 'Топливо', 'fuel', ['admin','viewer']],
@@ -376,6 +377,135 @@ const vatNote = () => STATE.vat === 'net' ? `<div class="note warn">${ico('info'
 const PAGES = {};
 
 /* ---------- Дашборд ---------- */
+/* ---------- Аналитика за весь период ---------- */
+function analyticsRecords() {
+  const months=[...new Set([...ALL_YMS,...Object.keys(FIN),...Object.keys(KM),...Object.keys(D.wdays||{})])].sort();
+  const records=[];
+  for (const ym of months) {
+    const keys=new Set([...detailKeys(ym),...Object.keys(D.fuel_month[ym]||{})]);
+    const alloc=allocation(ym).cars;
+    for(const k of keys) {
+      const a=finCar(ym,k), h=histProfit(ym,k), km=kmOf(ym,k), f=D.fuel_month[ym]?.[k], d=daysOf(ym,k), sr=rowOf(ym,k);
+      const liters=f ? (f.monthly_liters ?? (f.card_days>0 ? f.rn+f.e100 : null)) : null;
+      const hasDays=D.wdays?.[ym]?.[k]!=null||!!(sr&&(sr.tot||/[^.]/.test(sr.c||'')));
+      if(!a&&h==null&&km==null&&liters==null&&!hasDays) continue;
+      const income=a&&INCOME_ARTS.some(x=>x in a)?carIncome(ym,k):null;
+      const expense=a&&Object.keys(a).some(x=>!INCOME_ARTS.includes(x))?carExpense(ym,k):null;
+      const raw=profitRaw(ym,k);
+      const overhead=raw==null?null:(UI.ALLOC_ON&&alloc[k] ? -alloc[k].share-alloc[k].amort : 0);
+      const days=hasDays?workedOf(ym,k):null;
+      const filled=SCHED[ym]&&!SCHED[ym].manual&&D.wdays?.[ym]?.[k]==null?filledDays(ym):daysIn(ym);
+      const v=V[k]||{};
+      const capacity=FiberAnalytics.capacity(ym,{from:v.from,to:v.to,filled});
+      records.push({k,ym,make:v.make||'',financial:!!a,income,expense,overhead,cost:expense==null?null:expense+overhead,
+        raw,profit:raw==null?null:(UI.ALLOC_ON?alloc[k]?.alloc??null:raw),km,days,capacity,liters,amort:v.amort??null,articles:a||{},
+        noDriver:hasDays?d?.no_driver??null:null,idle:hasDays?d?.idle??null:null,planned:hasDays?d?.planned??null:null,unplanned:hasDays?d?.unplanned??null:null});
+    }
+  }
+  return records;
+}
+PAGES.analytics = () => {
+  topbar('Аналитика за всё время',{money:true,extra:'<button class="btn" id="analyticsExcel">'+ico('xls',15)+'Excel</button>'});
+  const records=analyticsRecords(), A=UI.ANALYTICS||(UI.ANALYTICS={from:'',to:'',car:'',make:'',sort:'profit',dir:-1,q:'',allRecs:false});
+  const model=FiberAnalytics.analyze(records,A,S), t=model.totals;
+  const yms=[...new Set(records.map(r=>r.ym))].sort();
+  if(!yms.length) { $('#content').innerHTML=empty('Пока нет данных для аналитики','Загрузите финансовый или топливный шаблон. Новый раздел объединит все заполненные периоды.','dyn'); $('#analyticsExcel').disabled=true; return; }
+  const option=(value,text,selected)=>`<option value="${esc(value)}" ${value===selected?'selected':''}>${esc(text)}</option>`;
+  const monthsOptions=selected=>option('','Без ограничения',selected)+yms.map(y=>option(y,ymLabel(y),selected)).join('');
+  const makes=[...new Set(records.map(r=>r.make).filter(Boolean))].sort();
+  const cars=[...new Set(records.map(r=>r.k))].sort((a,b)=>name(a).localeCompare(name(b),'ru',{numeric:true}));
+  const range=model.months.length?`${ymLabel(model.months[0].key)} — ${ymLabel(model.months.at(-1).key)}`:'Нет данных в выбранном диапазоне';
+  const number=(v,kind)=>kind==='money'?rub(v):kind==='pct'?pct(v):kind==='price'?(v==null?'—':dec(v,2)+NB+'₽'):kind==='liters'?dec(v,3):kind==='decimal'?dec(v,1):int(v);
+  const kpi=(label,value,kind,hint,extra='')=>`<article class="card kpi ${extra}"><div class="lbl">${label}</div><div class="analytics-value">${number(value,kind)}</div><p class="muted">${hint}</p></article>`;
+  const cov=t.coverage;
+  $('#content').innerHTML=`<section class="analytics-hero"><div><div class="analytics-eyebrow">ПАРК В ЦИФРАХ</div><h2>${range}</h2><p>${model.monthCount} мес. с данными · ${model.carCount} машин · ${cov.rows} строк «машина × месяц»</p></div><div class="analytics-hero-badge">${UI.ALLOC_ON?'С общими расходами и амортизацией':'До общих расходов'}<br><small>${NET()?'Суммы без НДС':'Суммы с НДС; историческая прибыль — как внесена'}</small></div></section>
+    <section class="card panel analytics-filters"><div class="analytics-presets"><button class="pill ${!A.from&&!A.to?'on':''}" data-ayear="all">Всё время</button>${model.years.map(y=>`<button class="pill ${A.from===y+'-01'&&A.to===y+'-12'?'on':''}" data-ayear="${y}">${y}</button>`).join('')}</div><div class="analytics-filter-grid">
+      <label>С месяца<select class="inp" id="analyticsFrom">${monthsOptions(A.from)}</select></label><label>По месяц<select class="inp" id="analyticsTo">${monthsOptions(A.to)}</select></label>
+      <label>Марка<select class="inp" id="analyticsMake">${option('','Все марки',A.make)+makes.map(m=>option(m,m,A.make)).join('')}</select></label>
+      <label>Автомобиль<select class="inp" id="analyticsCar">${option('','Весь парк',A.car)+cars.map(k=>option(k,name(k)+' · '+(V[k]?.plate||'без госномера'),A.car)).join('')}</select></label><button class="btn" id="analyticsReset">Сбросить</button></div></section>
+    ${A.from&&A.to&&A.from>A.to?'<div class="note warn">Начало периода позже его окончания. Измените границы периода.</div>':''}
+    <section class="kpis analytics-kpis">
+      ${kpi('Доходы',t.income,'money',`${cov.income} из ${cov.rows} строк с доходами`)}
+      ${kpi('Прямые расходы',t.expense,'money','По заполненным статьям машин')}
+      ${kpi(UI.ALLOC_ON?'Прибыль с общими':'Прибыль до общих',t.profit,'money',`${cov.finance} из ${cov.rows} строк с прибылью`,t.profit<0?'analytics-negative':'analytics-positive')}
+      ${kpi('Маржа',t.margin,'pct',t.margin==null?'Нужны доходы для всех строк с прибылью':'Прибыль ÷ доходы × 100')}
+      ${kpi('Пробег',t.km,'int',`${cov.km} из ${cov.rows} строк · км`)}
+      ${kpi('Рабочие дни',t.days,'int',`${cov.days} из ${cov.rows} строк`)}
+      ${kpi('Использование парка',t.utilization,'pct','Рабочие ÷ доступные календарные дни')}
+      ${kpi('Топливо',t.liters,'liters',`${cov.liters} из ${cov.rows} строк · литров`)}
+      ${kpi('Средний расход',t.rate,'decimal',`л/100 км · ${cov.matched} сопоставимых строк`)}
+      ${kpi('Себестоимость',t.costKm,'price',`₽/км · ${cov.costMatched} сопоставимых строк`)}
+      ${kpi('Общие + амортизация',t.overhead,'money',UI.ALLOC_ON?'Распределено на выбранные машины':'Распределение выключено')}
+      ${kpi('Сигналы для проверки',model.recs.length,'int',`${new Set(model.recs.map(r=>r.k)).size} машин с рекомендациями`)}
+    </section>
+    <div class="note">${ico('info')}<div>Показаны все периоды с внесёнными данными; пустые месяцы и поля не считаются нулями. Л/100 км и ₽/км рассчитаны по суммам сопоставимых строк, а не средним процентам. Для ₽/км учитываются и затраты при явно нулевом пробеге; строки без пробега исключены. При неполном вводе итоги предварительные. Амортизация берётся из текущего справочника. Историческая прибыль без расшифровки не превращается в выручку или расходы.</div></div>
+    <section class="analytics-charts"><div class="card panel"><div class="panel-h"><div><h2>Доходы, затраты и прибыль</h2><p>По всем месяцам выбранного периода · нажмите на месяц для детализации</p></div></div><div id="analyticsFinanceChart" class="chart analytics-chart"></div></div>
+    <div class="card panel"><div class="panel-h"><div><h2>Накопленная прибыль</h2><p>Нарастающим итогом с начала выбранного периода</p></div></div><div id="analyticsCumulativeChart" class="chart analytics-chart"></div></div>
+    <div class="card panel"><div class="panel-h"><div><h2>Структура прямых расходов</h2><p>Общие расходы и амортизация показаны отдельно</p></div></div><div id="analyticsExpenseChart" class="chart analytics-chart"></div></div>
+    <div class="card panel"><div class="panel-h"><div><h2>Топливо и пробег</h2><p>Л/100 км — только по машинам с литрами и положительным пробегом</p></div></div><div id="analyticsFuelChart" class="chart analytics-chart"></div></div>
+    <div class="card panel"><div class="panel-h"><div><h2>Рабочие дни и использование</h2><p>Даты работы машины учитываются при расчёте доступных дней</p></div></div><div id="analyticsDaysChart" class="chart analytics-chart"></div></div>
+    <div class="card panel"><div class="panel-h"><div><h2>Прибыль по автомобилям</h2><p>12 машин с наименьшей прибылью; полный рейтинг — в таблице ниже</p></div></div><div id="analyticsCarsChart" class="chart analytics-chart"></div></div></section>
+    <section class="card panel analytics-section"><div class="panel-h"><div><h2>Что проверить и улучшить</h2><p>Каждый сигнал связан с машиной и месяцами. Пороги топлива — из настроек: ${dec(S.lMin)}–${dec(S.lMax)} л/100 км; рост больше ${S.fuelJumpPct}%.</p></div><div class="spacer"></div><button class="btn" id="analyticsAllRecs">${A.allRecs?'Показать первые 12':'Показать все'} (${model.recs.length})</button></div><label class="analytics-rec-filter">Группа рекомендаций<select id="analyticsRecCategory" class="inp"><option value="">Все сигналы</option><option value="profit">Прибыль и затраты</option><option value="fuel">Топливо</option><option value="work">Загрузка и простои</option><option value="data">Полнота данных</option></select></label><div id="analyticsRecommendations" class="analytics-recommendations"></div><p class="muted">Дополнительные правила: маржа ниже 10%, ремонт + ТО + шины выше 20% доходов, использование ниже 50%; рост затрат больше 20% опережает доходы. Сигнал означает необходимость проверки; сумму экономии программа не обещает.</p></section>
+    <section class="card panel analytics-section"><div class="panel-h"><div><h2>Все месяцы</h2><p>Полнота данных — число сопоставимых строк топлива из всех строк месяца</p></div></div><div class="tbl-wrap" id="analyticsMonthsTable"></div></section>
+    <section class="card panel analytics-section"><div class="panel-h"><div><h2>Все автомобили</h2><p>Сортировка по заголовкам · поиск по короткому номеру и госномеру</p></div><div class="spacer"></div><label class="analytics-search">Поиск<input id="analyticsSearch" type="text" value="${esc(A.q)}" placeholder="Номер или госномер"></label></div><div class="tbl-wrap" id="analyticsCarsTable"></div><p id="analyticsCarCount" class="muted"></p></section>
+    <details class="card panel analytics-section" id="analyticsDetails"><summary>Все исходные показатели по машинам и месяцам</summary><p class="muted">Доходы, каждая статья расходов, общие, прибыль, пробег, дни и топливо. Пустое поле означает отсутствие значения.</p><div class="tbl-wrap" id="analyticsDetailsTable"></div></details>`;
+  // Preset years may start/end outside the first loaded month; keep their selection visible.
+  for(const [id,value] of [['analyticsFrom',A.from],['analyticsTo',A.to]]) if(value&&!yms.includes(value)) $('#'+id).insertAdjacentHTML('beforeend',option(value,ymLabel(value),value));
+  for(const [id,key] of [['analyticsFrom','from'],['analyticsTo','to'],['analyticsCar','car'],['analyticsMake','make']]) $('#'+id).onchange=e=>{A[key]=e.target.value;if(key==='make') A.car='';render();};
+  $$('[data-ayear]').forEach(b=>b.onclick=()=>{A.from=b.dataset.ayear==='all'?'':b.dataset.ayear+'-01';A.to=b.dataset.ayear==='all'?'':b.dataset.ayear+'-12';render();});
+  $('#analyticsReset').onclick=()=>{UI.ANALYTICS=null;render();};
+  const cols=[['income','Доходы','money'],['expense','Прямые расходы','money'],['overhead','Общие + аморт.','money'],['profit','Прибыль','money'],['margin','Маржа','pct'],['km','Пробег, км','int'],['days','Раб. дни','int'],['utilization','Использование','pct'],['liters','Литры','liters'],['rate','Л/100 км','decimal'],['costKm','₽/км','price']];
+  function table(rows,identity,sortable=false) {
+    return `<table><thead><tr><th class="l">${identity}</th>${cols.map(([k,label])=>`<th>${sortable?`<button class="analytics-sort" data-asort="${k}">${label}${A.sort===k?(A.dir===1?' ↑':' ↓'):''}</button>`:label}</th>`).join('')}<th>Месяцев / полнота</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="l">${identity==='Месяц'?`<a href="#/cars" data-aopen="${r.key}">${ymLabel(r.key)}</a>`:`<a href="#/car/${encodeURIComponent(r.key)}">${esc(name(r.key))}</a><small class="analytics-plate">${esc(V[r.key]?.plate||'—')}</small>`}</td>${cols.map(([k,,kind])=>`<td class="${k==='profit'?(r[k]<0?'analytics-loss':'analytics-gain'):''}">${number(r[k],kind)}</td>`).join('')}<td>${r.months} / ${r.coverage.matched} из ${r.coverage.rows}</td></tr>`).join('')||'<tr><td colspan="13">Нет данных по выбранным условиям</td></tr>'}</tbody></table>`;
+  }
+  $('#analyticsMonthsTable').innerHTML=table(model.months,'Месяц');
+  function drawCars() {
+    const q=A.q.toLocaleLowerCase('ru').replace(/\s/g,'');
+    const rows=model.cars.filter(r=>(name(r.key)+' '+(V[r.key]?.plate||'')).toLocaleLowerCase('ru').replace(/\s/g,'').includes(q)).sort((a,b)=>{
+      if(a[A.sort]==null) return b[A.sort]==null?0:1;if(b[A.sort]==null)return -1;
+      return (a[A.sort]-b[A.sort])*A.dir||name(a.key).localeCompare(name(b.key),'ru',{numeric:true});
+    });
+    $('#analyticsCarsTable').innerHTML=table(rows,'Автомобиль',true);
+    $('#analyticsCarCount').textContent=`Показано ${rows.length} из ${model.carCount} машин. В Excel выгружаются все машины выбранного периода, независимо от поиска в таблице.`;
+    $$('[data-asort]').forEach(b=>b.onclick=()=>{if(A.sort===b.dataset.asort)A.dir*=-1;else{A.sort=b.dataset.asort;A.dir=-1;}drawCars();});
+  }
+  $('#analyticsSearch').oninput=e=>{A.q=e.target.value;drawCars();};drawCars();
+  const recValue=r=>r.code==='highFuel'?`${dec(r.value,3)} л выше порога`:['loss','repair'].includes(r.code)?rub(r.value):'';
+  const recCategory=r=>['loss','margin','repair','expenseGrowth'].includes(r.code)?'profit':['highFuel','lowFuel','fuelJump','fuelKm','fuelLiters'].includes(r.code)?'fuel':r.code==='utilization'?'work':'data';
+  function drawRecs() {
+    const selected=model.recs.filter(r=>!A.recCategory||recCategory(r)===A.recCategory);
+    $('#analyticsAllRecs').textContent=(A.allRecs?'Показать первые 12':'Показать все')+` (${selected.length})`;
+    $('#analyticsRecommendations').innerHTML=(A.allRecs?selected:selected.slice(0,12)).map(r=>`<article class="analytics-rec priority-${r.priority}"><div class="analytics-rec-top"><a href="#/car/${encodeURIComponent(r.k)}">${esc(name(r.k))} · ${esc(V[r.k]?.plate||'')}</a><span>${esc(recValue(r))}</span></div><h3>${r.title}</h3><p>${r.action}</p><details><summary>${r.months.length} мес. · посмотреть периоды</summary><div class="analytics-rec-months">${r.months.map(y=>`<a href="#/cars" data-aopen="${y}">${ymLabel(y)}</a>`).join('')}</div></details></article>`).join('')||'<p class="muted">По выбранным данным сигналы не обнаружены. Проверьте полноту ввода в таблицах.</p>';
+    bindMonths();
+  }
+  function bindMonths(){ $$('[data-aopen]').forEach(a=>a.onclick=()=>{STATE.ym=a.dataset.aopen;}); }
+  $('#analyticsRecCategory').value=A.recCategory||'';
+  $('#analyticsRecCategory').onchange=e=>{A.recCategory=e.target.value;A.allRecs=false;drawRecs();};
+  $('#analyticsAllRecs').onclick=()=>{A.allRecs=!A.allRecs;$('#analyticsAllRecs').textContent=(A.allRecs?'Показать первые 12':'Показать все')+` (${model.recs.length})`;drawRecs();};drawRecs();bindMonths();
+  const detailCols=[['ym','Месяц'],['k','Машина'],['income','Доходы'],['expense','Прямые расходы'],['overhead','Общие и амортизация'],['profit','Прибыль'],['km','Пробег, км'],['days','Рабочие дни'],['liters','Литры'],['noDriver','Дни без водителя'],['idle','Дни простоя'],['planned','Дни ТО'],['unplanned','Дни ремонта'],...Object.entries(ART_NAMES)];
+  const detailValues=r=>detailCols.map(([k])=>k==='ym'?ymLabel(r.ym):k==='k'?name(r.k):r[k]??r.articles[k]??null);
+  $('#analyticsDetails').ontoggle=()=>{if($('#analyticsDetails').open) $('#analyticsDetailsTable').innerHTML=`<table><thead><tr>${detailCols.map(([,l])=>`<th>${l}</th>`).join('')}</tr></thead><tbody>${model.rows.map(r=>`<tr>${detailValues(r).map(v=>`<td>${typeof v==='number'?dec(v,2):esc(v??'—')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;};
+  $('#analyticsExcel').onclick=()=>{
+    const h=labels=>labels.map(x=>[x,'h']);
+    const summary=(rows,label)=>({name:label,rows:[[[`FiberTrack · ${range} · ${NET()?'без НДС':'с НДС'} · ${UI.ALLOC_ON?'с общими':'без общих'}`,'t']],h([label,...cols.map(c=>c[1]),'Сопоставимых строк топлива','Всего строк']),...rows.map(r=>[label==='Месяцы'?ymLabel(r.key):name(r.key),...cols.map(([k])=>k==='liters'?[r[k],'liters']:r[k]),r.coverage.matched,r.coverage.rows])]});
+    download('FiberTruck_аналитика.xlsx',workbook([summary(model.months,'Месяцы'),summary(model.cars,'Машины'),{name:'Все показатели',rows:[h(detailCols.map(c=>c[1])),...model.rows.map(r=>detailValues(r).map((v,i)=>detailCols[i][0]==='liters'?[v,'liters']:v))]},{name:'Рекомендации',rows:[h(['Машина','Госномер','Сигнал','Месяцы','Что проверить','Объём или сумма']),...model.recs.map(r=>[name(r.k),V[r.k]?.plate||'',r.title,r.months.join(', '),r.action,recValue(r)])]}]));
+    toast('Аналитика выгружена: 4 листа Excel');
+  };
+  if(!model.months.length) return;
+  const ms=model.months,labels=ms.map(r=>ymShort(r.key));
+  const base={grid:{left:12,right:30,top:40,bottom:16,containLabel:true},tooltip:{trigger:'axis',valueFormatter:v=>v==null?'Нет данных':dec(v,1)},legend:{top:0,textStyle:{color:css('--ink-2')}},xAxis:axisCat(labels),yAxis:axisVal()};
+  const series=(title,field,color,type='bar')=>({name:title,type,data:ms.map(r=>r[field]),itemStyle:{color:css(color)},connectNulls:false,barMaxWidth:28});
+  const financeChart=chart($('#analyticsFinanceChart'),{...base,series:[series('Доходы','income','--s-2'),series(UI.ALLOC_ON?'Затраты с общими':'Прямые расходы','cost','--s-down'),series('Прибыль','profit','--s-up','line')]});
+  financeChart.on('click',p=>{if(ms[p.dataIndex]){STATE.ym=ms[p.dataIndex].key;go('cars');}});
+  let cumulative=0;chart($('#analyticsCumulativeChart'),{...base,series:[{name:'Накопленная прибыль',type:'line',areaStyle:{opacity:.12},itemStyle:{color:css('--s-up')},data:ms.map(r=>r.profit==null?null:(cumulative+=r.profit)),connectNulls:false}]});
+  const expenses=Object.entries(t.articles).filter(([a,v])=>!INCOME_ARTS.includes(a)&&v>0).sort((a,b)=>b[1]-a[1]);
+  chart($('#analyticsExpenseChart'),{tooltip:{trigger:'item',valueFormatter:rub},legend:{type:'scroll',bottom:0,textStyle:{color:css('--ink-2')}},series:[{type:'pie',radius:['40%','67%'],center:['50%','43%'],label:{show:false},data:expenses.map(([a,value])=>({name:ART_NAMES[a]||a,value}))}]});
+  chart($('#analyticsFuelChart'),{...base,yAxis:[axisVal(),{...axisVal(v=>dec(v,0)),position:'right',splitLine:{show:false}}],series:[series('Литры','liters','--s-2'),{...series('Л/100 км','rate','--s-up','line'),yAxisIndex:1}]});
+  chart($('#analyticsDaysChart'),{...base,yAxis:[axisVal(),{...axisVal(v=>v+'%'),position:'right',splitLine:{show:false}}],series:[series('Рабочие дни','days','--s-2'),{...series('Использование, %','utilization','--s-up','line'),yAxisIndex:1}]});
+  const ranking=model.cars.filter(r=>r.profit!=null).sort((a,b)=>a.profit-b.profit).slice(0,12);
+  chart($('#analyticsCarsChart'),{grid:{left:10,right:25,top:10,bottom:10,containLabel:true},tooltip:{trigger:'axis',valueFormatter:rub},xAxis:axisVal(),yAxis:axisCat(ranking.map(r=>name(r.key)),{inverse:true}),series:[{type:'bar',data:ranking.map(r=>({value:r.profit,itemStyle:{color:css(r.profit<0?'--s-down':'--s-up')}})),barMaxWidth:22}]});
+};
+
 PAGES.dashboard = () => {
   const ym = STATE.ym, prev = prevYm(ym);
   topbar('Дашборд месяца', { month: true, money: true, extra: `<a class="btn hide-m" href="#/report">${ico('pdf', 15)}PDF</a><button class="btn hide-m" id="xls">${ico('xls', 15)}Excel</button>` });
@@ -1226,7 +1356,7 @@ PAGES.settings = () => {
 };
 
 /* ---------- Excel (.xlsx: открывается в Excel, Numbers, Google Таблицах) ---------- */
-const XSTYLE = { h: 1, n: 2, b: 3, t: 4, i: 5 };
+const XSTYLE = { h: 1, n: 2, b: 3, t: 4, i: 5, liters: 6 };
 const colName = i => { let s = ''; i++; while (i) { const m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); } return s; };
 const xesc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])).replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
 function sheetXml(sh) {
@@ -1236,7 +1366,7 @@ function sheetXml(sh) {
       const ref = colName(ci) + (ri + 1);
       const sAttr = st ? ` s="${XSTYLE[st]}"` : (typeof v === 'number' ? ' s="2"' : '');
       if (v == null || v === '') return st ? `<c r="${ref}"${sAttr}/>` : '';
-      if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${Number.isFinite(v) ? Math.round(v * 100) / 100 : 0}</v></c>`;
+      if (typeof v === 'number') return `<c r="${ref}"${sAttr}><v>${Number.isFinite(v) ? Math.round(v * (st==='liters'?1000:100)) / (st==='liters'?1000:100) : 0}</v></c>`;
       return `<c r="${ref}"${sAttr} t="inlineStr"><is><t xml:space="preserve">${xesc(v)}</t></is></c>`;
     }).join('');
     return `<row r="${ri + 1}">${cells}</row>`;
@@ -1252,12 +1382,12 @@ function workbook(sheets) {
     '_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
     'xl/workbook.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${names.map((n, i) => `<sheet name="${n}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`).join('')}</sheets></workbook>`,
     'xl/_rels/workbook.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, i) => `<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i + 1}.xml"/>`).join('')}<Relationship Id="rId${sheets.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
-    'xl/styles.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00;[Red]\-#,##0.00"/></numFmts>
+    'xl/styles.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="2"><numFmt numFmtId="165" formatCode="#,##0.000"/><numFmt numFmtId="164" formatCode="#,##0.00;[Red]\-#,##0.00"/></numFmts>
 <fonts count="4"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="13"/><name val="Calibri"/></font></fonts>
 <fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0B1F3A"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFFFF3CC"/></patternFill></fill></fills>
 <borders count="2"><border/><border><left style="thin"><color rgb="FFD6D9DF"/></left><right style="thin"><color rgb="FFD6D9DF"/></right><top style="thin"><color rgb="FFD6D9DF"/></top><bottom style="thin"><color rgb="FFD6D9DF"/></bottom></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="6"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="164" fontId="2" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/><xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="164" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
+<cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="164" fontId="2" fillId="0" borderId="0" xfId="0" applyNumberFormat="1" applyFont="1"/><xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/><xf numFmtId="164" fontId="0" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFill="1" applyBorder="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
   };
   sheets.forEach((sh, i) => files[`xl/worksheets/sheet${i + 1}.xml`] = sheetXml(sh));
   return zipStore(files);

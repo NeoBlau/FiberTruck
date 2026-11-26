@@ -29,7 +29,7 @@ def upload_dict(u: Upload, names: dict[int, str]) -> dict:
 
 
 def visible(user: User, u: Upload) -> bool:
-    return user.role == 'admin' or u.kind != 'profit'     # таблица прибыли — данные не для бухгалтера
+    return user.role == 'admin' or (u.kind != 'profit' and not u.preview.get('manual'))     # таблица прибыли — данные не для бухгалтера
 
 
 def get_upload(db: Session, upload_id: int, user: User) -> Upload:

@@ -9,6 +9,8 @@ from tests.conftest import SECRET_PROFIT_RUB, login
 
 # Кому разрешён каждый изменяющий маршрут. Новый маршрут без записи здесь — тест упадёт.
 MATRIX = {
+    ('GET', '/api/manual/{ym}'): {'admin'},
+    ('PUT', '/api/manual/{ym}/{kind}/{key}'): {'admin'},
     ('GET', '/api/backup'): {'admin'},
     ('PUT', '/api/settings'): {'admin'},
     ('POST', '/api/vehicles'): {'admin', 'input'},
@@ -28,7 +30,7 @@ MATRIX = {
     ('GET', '/api/fuel-template/{ym}'): {'admin', 'input'},
 }
 OPEN_TO_ALL = {('POST', '/api/auth/login'), ('POST', '/api/auth/logout'), ('GET', '/api/auth/me'), ('GET', '/api/bootstrap'), ('GET', '/api/health')}
-SAMPLE = {'{key}': '885', '{ym}': '2026-12', '{item_id}': '1', '{upload_id}': '1'}
+SAMPLE = {'{kind}':'fuel', '{key}': '885', '{ym}': '2026-12', '{item_id}': '1', '{upload_id}': '1'}
 
 
 def api_routes():

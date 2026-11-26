@@ -1,7 +1,7 @@
 """Ручной ввод по машине за открытый месяц. Сохранение заменяет прежние данные машины за месяц
 (и введённые вручную, и пришедшие из шаблона) — двойного счёта не бывает."""
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -18,6 +18,7 @@ TITLES = dict(TEMPLATE_COLUMNS)
 
 
 class EntryIn(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
     km: int | None = None
     days: int | None = None
     amounts: dict[str, float | None] = {}
@@ -26,15 +27,8 @@ class EntryIn(BaseModel):
     document: str | None = Field(default=None, max_length=128)
 
 
-@router.put('/{ym}/{key}')
-def save(ym: str, key: str, e: EntryIn, user: User = Depends(require_roles('admin', 'input')), db: Session = Depends(get_db)):
-    p = db.scalar(select(Period).where(Period.ym == ym))
-    if not p or p.status != 'open':
-        raise HTTPException(409, 'Месяц закрыт для ввода. Попросите владельца открыть его.')
-    v = db.scalar(select(Vehicle).where(Vehicle.key == key))
-    if not v:
-        raise HTTPException(404, 'Машина не найдена')
-    s, errs = ui_settings(db), {}
+def validate_entry(e: EntryIn, s: dict, ym: str):
+    errs = {}
     if e.km is not None and not (s['kmMin'] <= e.km <= s['kmMax']):
         errs['km'] = f"Пробег должен быть от {int(s['kmMin']):,} до {int(s['kmMax']):,} км".replace(',', ' ')
     if e.days is not None and not (0 <= e.days <= days_in(ym)):
@@ -46,10 +40,22 @@ def save(ym: str, key: str, e: EntryIn, user: User = Depends(require_roles('admi
         errs['amounts'] = 'Неизвестные статьи: ' + ', '.join(unknown)
     amounts = {a: val for a, val in e.amounts.items() if a in MONEY_ARTICLES and val is not None}
     for a, val in amounts.items():
-        if val < 0:
-            errs[a] = 'Сумма не может быть отрицательной'
+        if not 0 <= val <= 1000000000000:
+            errs[a] = 'Сумма должна быть от 0 до 1 000 000 000 000 ₽'
     if e.vat == 'без НДС' and e.gross and any(amounts.values()):
         errs['vat'] = 'Ставка «без НДС», а отмечено «с НДС» — снимите галочку или выберите ставку'
+    return amounts, errs
+
+
+@router.put('/{ym}/{key}')
+def save(ym: str, key: str, e: EntryIn, user: User = Depends(require_roles('admin', 'input')), db: Session = Depends(get_db)):
+    p = db.scalar(select(Period).where(Period.ym == ym))
+    if not p or p.status != 'open':
+        raise HTTPException(409, 'Месяц закрыт для ввода. Попросите владельца открыть его.')
+    v = db.scalar(select(Vehicle).where(Vehicle.key == key))
+    if not v:
+        raise HTTPException(404, 'Машина не найдена')
+    amounts, errs = validate_entry(e, ui_settings(db), ym)
     if errs:
         raise HTTPException(422, errs)
 

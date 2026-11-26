@@ -105,7 +105,7 @@ def build_payload(db: Session, user: User) -> dict:
                    for r in db.scalars(select(ReviewItem).where(ReviewItem.resolved_at.is_(None)).order_by(ReviewItem.id))],
         'audit': [{'at': a.at.astimezone(ZoneInfo(cfg.timezone)).strftime('%d.%m.%Y, %H:%M'), 'who': a.user_name, 'entity': a.entity, 'car': a.entity_key,
                    'field': a.field, 'before': a.before, 'after': a.after}
-                  for a in db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(300))][::-1],
+                  for a in db.scalars(select(AuditLog).order_by(AuditLog.id.desc()).limit(300)) if analytics or a.entity != 'manual'][::-1],
         'input': input_entries(db, keys, list(periods) if analytics else open_yms),
         # аналитика — только владельцу и руководителю
         'profit': {}, 'shared': {}, 'bench': {}, 'fuel_month': {}, 'idle_hist': {}, 'textdic': [], 'fin': {}, 'km': {}, 'wdays': {}, 'profit_months': [], 'fuel_stats': {},

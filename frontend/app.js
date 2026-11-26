@@ -255,6 +255,7 @@ const NAV = [
   ['recon', 'Сверка', 'recon', ['admin','viewer']],
   ['report', 'Отчёт руководителю', 'report', ['admin','viewer']],
   ['-', 'Данные'],
+  ['edit', 'Правки на сайте', 'settings', ['admin']],
   ['input', 'Загрузка и ввод', 'upload', ['admin','input']],
   ['periods', 'Месяцы', 'cal', ['admin']],
   ['fleet', 'Справочник машин', 'truck', ['admin','viewer','input']],
@@ -360,7 +361,7 @@ function topbar(title, opts = {}) {
   const monthCtl = opts.month ? `<div class="month"><button class="btn" data-mo="-1" aria-label="Предыдущий месяц" ${ALL_YMS.indexOf(ym) <= 0 ? 'disabled' : ''}>${ico('prev', 15)}</button><select id="selectedMonth" aria-label="Месяц">${[...new Set([...ALL_YMS, ym])].sort().map(y => `<option value="${y}" ${y === ym ? 'selected' : ''}>${ymLabel(y)}</option>`).join('')}</select><button class="btn" data-mo="1" aria-label="Следующий месяц" ${ALL_YMS.indexOf(ym) >= ALL_YMS.length - 1 ? 'disabled' : ''}>${ico('next', 15)}</button></div>` : '';
   const tb = opts.money ? `<div class="toolbar-row"><div class="seg" role="group" aria-label="НДС"><button data-vat="asis" class="${STATE.vat === 'asis' ? 'on' : ''}"><span class="l">Деньги (как есть)</span><span class="s">Как есть</span></button><button data-vat="net" class="${STATE.vat === 'net' ? 'on' : ''}">Без НДС</button></div>
     <div class="seg" role="group" aria-label="Общие расходы"><button data-alloc="1" class="${UI.ALLOC_ON ? 'on' : ''}"><span class="l">С распределением</span><span class="s">С общими</span></button><button data-alloc="0" class="${!UI.ALLOC_ON ? 'on' : ''}"><span class="l">Без распределения</span><span class="s">Без общих</span></button></div></div>` : '';
-  $('#top').innerHTML = `<button class="btn iconbtn burger" id="burger" aria-label="Меню">${ico('menu')}</button><h1>${title}</h1>${monthCtl}<div class="spacer"></div>${tb}${opts.extra || ''}<button class="btn" id="refreshData">Обновить данные</button><button class="btn iconbtn" id="theme" aria-label="Сменить тему">${ico('moon')}</button>`;
+  $('#top').innerHTML = `<button class="btn iconbtn burger" id="burger" aria-label="Меню">${ico('menu')}</button><h1>${title}</h1>${monthCtl}<div class="spacer"></div>${tb}${opts.extra || ''}${ROLE==='admin'&&parseHash().page!=='edit'?`<a class="btn hide-m" href="#/edit?ym=${ym}&tab=${parseHash().page==='fuel'?'fuel':'finance'}${parseHash().page==='car'?'&car='+encodeURIComponent(parseHash().arg):''}">Правки на сайте</a>`:''}<button class="btn" id="refreshData">Обновить данные</button><button class="btn iconbtn" id="theme" aria-label="Сменить тему">${ico('moon')}</button>`;
   $('#refreshData').onclick = async () => { try { await refresh(); toast('Данные обновлены с сервера'); } catch(e) { toast(e.message); } };
   if ($('#selectedMonth')) $('#selectedMonth').onchange = e => { STATE.ym = e.target.value; render(); };
   $$('[data-mo]').forEach(b => b.onclick = () => { const i = ALL_YMS.indexOf(STATE.ym) + Number(b.dataset.mo); if (ALL_YMS[i]) { STATE.ym = ALL_YMS[i]; render(); } });
@@ -1007,6 +1008,53 @@ const entryTotals = x => {
     hasRev: a.revenue != null, any: Object.keys(a).length > 0 || (x && (x.km != null || x.days != null)) };
 };
 const fmtDT = iso => { const d = new Date(iso); return d.toLocaleDateString('ru-RU') + ', ' + d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }); };
+/* ---------- Правки без Excel ---------- */
+PAGES.edit = async () => {
+  const route=parseHash();
+  if(UI.manualRoute!==location.hash){UI.manualRoute=location.hash;if(/^20\d\d-(0[1-9]|1[0-2])$/.test(route.q.get('ym')||'')) STATE.ym=route.q.get('ym');UI.MANUAL_TAB=route.q.get('tab')||'finance';if(route.q.get('car')) UI.MANUAL_QUERY=name(route.q.get('car'));}
+  const ym=STATE.ym, token=Symbol();UI.editLoad=token;
+  topbar('Правки на сайте',{month:true});
+  let data;
+  try{data=await api(`/api/manual/${ym}`);}catch(e){if(UI.editLoad===token)$('#content').innerHTML=empty('Не удалось открыть данные',e.message,'info');return;}
+  if(UI.editLoad!==token||parseHash().page!=='edit')return;
+  const open=data.status==='open',tab=['finance','fuel','shared'].includes(UI.MANUAL_TAB)?UI.MANUAL_TAB:'finance';
+  $('#content').innerHTML=`<section class="manual-intro card panel"><div class="panel-h"><div><h2>Исправление данных · ${ymLabel(ym)}</h2><p>Выберите машину и нажмите «Изменить». После сохранения показатели и аналитика обновятся.</p></div><div class="spacer"></div>${open?'<button class="btn" id="manualCloseMonth">Закрыть месяц</button>':`<button class="btn primary" id="manualOpenMonth">${data.status==='closed'?'Открыть для исправления':'Открыть месяц'}</button>`}</div><div class="note ${open?'':'warn'}">${ico('info')}<div>${open?'Месяц открыт. Пустое поле очищает прежнее значение, ноль сохраняется как ноль. Каждая правка записывается в историю; её можно отменить.':'Месяц закрыт для изменений. Откройте его кнопкой выше; для закрытого периода нужно указать причину. Данные пока доступны только для просмотра.'}</div></div><div class="analytics-presets">${[['finance','Финансы и пробег'],['fuel','Топливо · литры'],['shared','Общие расходы']].map(([k,t])=>`<button class="pill ${tab===k?'on':''}" data-manual-tab="${k}">${t}</button>`).join('')}</div></section>
+  <section class="card panel analytics-section"><div class="panel-h"><div><h2>${tab==='finance'?'Финансы и пробег по машинам':tab==='fuel'?'Количество литров за месяц':'Общие расходы парка'}</h2><p>${tab==='fuel'?'Л/100 км берётся из литров и пробега за тот же месяц. Расходы в рублях редактируются на вкладке финансов.':tab==='shared'?'Положительная сумма — расход, отрицательная — доход, уменьшающий общие расходы.':'Уже внесённые значения подставляются в форму. Можно исправить одну машину без загрузки файла.'}</p></div>${tab!=='shared'?`<div class="spacer"></div><label class="analytics-search">Поиск<input type="text" id="manualSearch" placeholder="Номер или госномер" value="${esc(UI.MANUAL_QUERY||'')}"></label>`:''}</div><div class="tbl-wrap" id="manualTable"></div><p class="muted">Изменяется только выбранная машина или общая статья за ${ymLabel(ym).toLowerCase()}. Остальные данные сохраняются.</p></section>
+  <section class="card panel analytics-section"><div class="panel-h"><div><h2>История правок за месяц</h2><p>Последние 30. Отмена защищена от перезаписи более поздних изменений.</p></div></div><div class="tbl-wrap"><table><thead><tr><th class="l">Правка</th><th>Кто и когда</th><th>Статус</th><th></th></tr></thead><tbody>${data.history.map(h=>`<tr><td class="l">${esc(h.label)}</td><td>${esc(h.who)}<br>${fmtDT(h.at)}</td><td>${h.status==='applied'?'Применена':'Отменена'}</td><td>${h.status==='applied'?`<button class="btn" data-manual-undo="${h.id}" ${open?'':'disabled'}>Отменить правку</button>`:''}</td></tr>`).join('')||'<tr><td colspan="4">Правок на сайте за этот месяц пока нет</td></tr>'}</tbody></table></div></section>`;
+  $$('[data-manual-tab]').forEach(b=>b.onclick=()=>go(`edit?ym=${ym}&tab=${b.dataset.manualTab}`));
+  if($('#manualOpenMonth')) $('#manualOpenMonth').onclick=async()=>{
+    const reason=data.status==='closed'?prompt('Причина открытия месяца для исправления:'):null;
+    if(data.status==='closed'&&!reason?.trim())return;
+    try{await api(`/api/periods/${ym}/${data.status==='closed'?'reopen':'open'}`,{method:'POST',body:data.status==='closed'?{reason}:undefined});await refresh();}catch(e){toast(e.message);}
+  };
+  if($('#manualCloseMonth')) $('#manualCloseMonth').onclick=async()=>{try{await api(`/api/periods/${ym}/close`,{method:'POST'});await refresh();}catch(e){toast(e.message);}};
+  $$('[data-manual-undo]').forEach(b=>b.onclick=async()=>{if(!confirm('Отменить эту правку и вернуть прежние значения?'))return;b.disabled=true;try{await api(`/api/uploads/${b.dataset.manualUndo}/rollback`,{method:'POST'});await refresh();toast('Прежние значения восстановлены');}catch(e){b.disabled=false;toast(e.message);}});
+  const editButton=(kind,key,disabled=false)=>`<button class="btn" data-manual-kind="${kind}" data-manual-key="${esc(key)}" ${!open||disabled?'disabled':''}>Изменить</button>`;
+  function draw(){
+    const query=(UI.MANUAL_QUERY||'').toLocaleLowerCase('ru').replace(/\s/g,'');
+    const keys=Object.keys(V).filter(k=>data.finance[k]&&data.fuel[k]).filter(k=>(name(k)+' '+(V[k].plate||'')).toLocaleLowerCase('ru').replace(/\s/g,'').includes(query)).sort((a,b)=>name(a).localeCompare(name(b),'ru',{numeric:true}));
+    const identity=k=>`<td class="l"><b>${esc(name(k))}</b><small class="analytics-plate">${esc(V[k].plate||'—')}</small></td>`;
+    let html;
+    if(tab==='shared') html=`<table><thead><tr><th class="l">Статья</th><th>Сумма, ₽</th><th>НДС</th><th></th></tr></thead><tbody>${[['shared_gen','Общехоз'],['shared_service','Сервис'],['shared_tractor','Трактор']].map(([k,n])=>{const s=data.shared[k];return `<tr><td class="l">${n}</td><td>${detailRub(s.amount)}</td><td>${s.vat} · ${s.gross?'с НДС':'без НДС'}${s.mixed?' · смешанные ставки':''}</td><td>${s.legacy?'<span class="muted">Исторический итог без расшифровки</span>':editButton('shared',k)}</td></tr>`;}).join('')}</tbody></table>`;
+    else html=`<table><thead><tr><th class="l">Автомобиль</th>${tab==='finance'?'<th>Пробег, км</th><th>Рабочие дни</th><th>Доходы</th><th>Прямые расходы</th>':'<th>Литров за месяц</th><th>Пробег, км</th><th>Л/100 км</th>'}<th></th></tr></thead><tbody>${keys.map(k=>{const f=data.finance[k],e=f.entry,a=e.amounts||{},l=data.fuel[k];return `<tr>${identity(k)}${tab==='finance'?`<td>${int(e.km)}</td><td>${int(e.days)}</td><td>${Object.keys(a).some(x=>INCOME_ARTS.includes(x))?rub(sumArts(a,x=>INCOME_ARTS.includes(x))):'—'}</td><td>${Object.keys(a).some(x=>!INCOME_ARTS.includes(x))?rub(sumArts(a,x=>!INCOME_ARTS.includes(x))):'—'}</td>`:`<td>${dec(l.liters,3)}</td><td>${int(e.km)}</td><td>${e.km>0&&l.liters!=null?dec(l.liters/e.km*100,1):'—'}</td>`}<td>${f.legacy&&tab==='finance'?'<span class="muted">Исторический итог без расшифровки</span>':editButton(tab,k)}</td></tr>`;}).join('')||'<tr><td colspan="6">Машина не найдена. Добавьте её в справочник машин.</td></tr>'}</tbody></table>`;
+    $('#manualTable').innerHTML=html;
+    $$('[data-manual-kind]').forEach(b=>b.onclick=()=>{
+      const kind=b.dataset.manualKind,k=b.dataset.manualKey,s=kind==='finance'?data.finance[k]:kind==='fuel'?data.fuel[k]:data.shared[k];
+      const save=body=>api(`/api/manual/${ym}/${kind}/${encodeURIComponent(k)}`,{method:'PUT',body:{expected:s.version,...body}});
+      if(kind==='finance')openEntry(ym,k,{entry:s.entry,save:entry=>save({entry})});
+      else openValueEditor(ym,kind,k,s,save);
+    });
+  }
+  if($('#manualSearch'))$('#manualSearch').oninput=e=>{UI.MANUAL_QUERY=e.target.value;draw();};draw();
+};
+function openValueEditor(ym,kind,key,state,save){
+  const fuel=kind==='fuel',title=fuel?name(key):({shared_gen:'Общехоз',shared_service:'Сервис',shared_tractor:'Трактор'})[key];
+  $('#modal').innerHTML=`<div class="card modal manual-value-dialog" role="dialog" aria-modal="true" aria-labelledby="manualTitle" style="width:min(520px,100%)"><h2 id="manualTitle">${esc(title)} · ${ymLabel(ym)}</h2><p class="muted">${fuel?'Количество литров за весь месяц. Пробег и расходы в рублях сохраняются.':'Сумма общей статьи. Остальные статьи и показатели машин сохраняются.'}</p>${fuel&&state.daily?'<div class="note warn">Суточные записи заменятся месячным итогом. Прежнюю детализацию можно восстановить отменой правки.</div>':''}${!fuel&&state.mixed?'<div class="note warn">Сейчас у статьи разные ставки НДС. При сохранении выбранная ставка применяется ко всему новому итогу.</div>':''}<div class="form"><label class="full">${fuel?'Литров за месяц':'Сумма в рублях'}<input type="number" step="${fuel?'.001':'.01'}" id="manualValue" value="${fuel?state.liters??'':state.amount??''}" ${fuel?'min="0" max="1000000"':''}></label>${fuel?'':`<label>Ставка НДС<select class="inp" id="manualVat">${['22%','10%','7%','5%','0%','без НДС'].map(v=>`<option ${v===state.vat?'selected':''}>${v}</option>`).join('')}</select></label><label><input type="checkbox" id="manualGross" ${state.gross?'checked':''}> Сумма с НДС</label><label class="full">Документ<input id="manualDocument" maxlength="128" value="${esc(state.document||'')}"></label>`}</div><p class="muted">Пустое поле очищает значение. Ноль сохраняется как ноль.</p><p class="err" id="manualError"></p><div class="actions"><button class="btn" id="manualCancel">Отмена</button><button class="btn primary" id="manualSave">Сохранить</button></div></div>`;
+  $('#modal').classList.add('open');$('#manualValue').focus();
+  const close=()=>$('#modal').classList.remove('open');$('#manualCancel').onclick=close;$('#modal').onclick=e=>{if(e.target.id==='modal')close();};document.onkeydown=e=>{if(e.key==='Escape')close();};
+  $('#manualSave').onclick=async()=>{const value=$('#manualValue').value.trim();$('#manualSave').disabled=true;try{await save({value:value===''?null:value,...(fuel?{}:{vat:$('#manualVat').value,gross:$('#manualGross').checked,document:$('#manualDocument').value.trim()||null})});close();await refresh();toast('Изменения сохранены');}catch(e){$('#manualSave').disabled=false;$('#manualError').textContent=e.message;}};
+}
+
 PAGES.input = () => {
   const OPEN = openMonths();
   if (!OPEN.length) { topbar('Загрузка и ввод'); $('#content').innerHTML = empty('Нет открытых месяцев', ROLE === 'admin' ? 'Откройте месяц на экране <a href="#/periods" style="color:var(--teal-ink)">«Месяцы»</a>.' : 'Все месяцы закрыты. Попросите владельца открыть нужный месяц.', 'upload') + uploadsCard(); loadUploads(); return; }
@@ -1125,8 +1173,8 @@ function showUpload(u, scroll) {
   };
   if (scroll) box.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
-function openEntry(ym, k) {
-  const x = (INPUT[ym] || {})[k] || {}, a = x.amounts || {};
+function openEntry(ym, k, options = {}) {
+  const x = options.entry || (INPUT[ym] || {})[k] || {}, a = x.amounts || {};
   const nd = daysIn(ym);
   const f = (id, label, val, extra = '') => `<label>${label}<input type="number" step="any" inputmode="decimal" id="in-${id}" value="${val ?? ''}" ${extra}><span class="err" id="in-${id}-e"></span></label>`;
   $('#modal').innerHTML = `<div class="card modal fade" role="dialog" aria-modal="true" aria-labelledby="mt" style="width:min(680px,100%)"><h2 id="mt">${name(k)} · ${ymLabel(ym).toLowerCase()}</h2><p class="muted" style="margin:0">${esc((V[k] || {}).plate || '')} · суммы в рублях${x.source === 'template' ? ' · сейчас данные из шаблона — сохранение заменит их' : ''}</p>
@@ -1152,7 +1200,7 @@ function openEntry(ym, k) {
     if (data.vat === 'без НДС' && data.gross && Object.values(amounts).some(v => v)) err('vat', 'Ставка «без НДС», а отмечено «с НДС» — снимите галочку');
     if (!ok) return;
     $('#ms').disabled = true;
-    api(`/api/input/${ym}/${encodeURIComponent(k)}`, { method: 'PUT', body: data })
+    (options.save ? options.save(data) : api(`/api/input/${ym}/${encodeURIComponent(k)}`, { method: 'PUT', body: data }))
       .then(async () => { close(); toast(`${name(k)}: сохранено`); await refresh(); })
       .catch(e => { $('#ms').disabled = false; showErrors(e, 'in-'); });
   };
@@ -1427,6 +1475,7 @@ function exportExcel() {
 }
 /* ---------- рендер ---------- */
 function render() {
+  UI.editLoad=null;
   charts.splice(0).forEach(c => c.dispose());
   hideTip();
   document.onkeydown = null;

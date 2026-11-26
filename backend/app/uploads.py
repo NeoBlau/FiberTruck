@@ -505,6 +505,26 @@ def _template_grid(wb, fwb):
     return g, bad
 
 
+def template_sections(grid, header_index, ctx):
+    """Keep car identity independent of whether a row precedes the shared block."""
+    shared_index = next((i for i in range(header_index + 1, len(grid))
+                         if str(grid[i][0] or '').strip().startswith('Общие расходы')), len(grid))
+    cars = list(grid[header_index + 1:shared_index])
+    shared = grid[shared_index:]
+    for values in shared[1:]:
+        name = str(values[0] or '').strip()
+        if not name or name.upper() in SHARED_ROWS or name.startswith('Общие расходы'):
+            continue
+        # Do not treat prose/footers as vehicles. Known plates and exact short numbers
+        # are accepted after the shared block, including newly added vehicles.
+        short = re.fullmatch(r'\d{1,3}(?:\.0)?\s*[МДФ]?', name.upper())
+        known_plate = any(re.sub(r'\s+', '', str(v).upper()).translate(str.maketrans('ABEKMHOPCTYX', 'АВЕКМНОРСТУХ'))
+                          in ctx.by_plate for v in values[:2] if v is not None)
+        if short or known_plate:
+            cars.append(values)
+    return cars, shared
+
+
 def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
     ws = wb.worksheets[0]
     ym = None
@@ -570,10 +590,8 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
                 out[a] = k
         return out
 
-    i = hdr_i + 1
-    while i < len(g) and not str(g[i][0] or '').strip().startswith('Общие расходы'):
-        r = g[i]
-        i += 1
+    vehicle_rows, shared_grid = template_sections(g, hdr_i, ctx)
+    for r in vehicle_rows:
         name = r[0]
         if name is None or not str(name).strip():
             continue
@@ -631,10 +649,8 @@ def plan_template(ctx: Ctx, wb, chosen_ym: str | None, fwb=None) -> dict:
 
     # общие расходы: «Общехоз», «Сервис», «Трактор»
     shared_rows = []
-    old_format = i < len(g) and str(g[i][1] or '').strip() == 'Сумма'      # шаблон прошлой версии: сумма в столбце B
-    while i < len(g):
-        r = g[i]
-        i += 1
+    old_format = bool(shared_grid) and str(shared_grid[0][1] or '').strip() == 'Сумма'  # старый шаблон
+    for r in shared_grid:
         name = str(r[0] or '').strip()
         art = SHARED_ROWS.get(name.upper())
         if not art:

@@ -19,7 +19,7 @@ from .db import SessionLocal
 from .models import FuelDay, Mileage, Operation, Period, Upload, User, Vehicle
 from .parsing import car_key, display
 from .uploads import (Ctx, SHARED_ROWS, UploadError, apply_upload, label_to_ym, make_preview,
-                      rollback_upload, row_to_dict)
+                      rollback_upload, row_to_dict, template_sections)
 
 DEFAULT_PACKAGE = Path(__file__).parent / 'packages' / 'reviewed-input.ftpack'
 MAGIC = b'FIBERTRUCK-PRIVATE-PACKAGE-1\n'
@@ -79,10 +79,13 @@ def open_package(path, key):
 def _roster(db, wb):
     ctx = Ctx(db)
     rows, seen = [], set()
-    for values in wb.worksheets[0].iter_rows(min_row=3, values_only=True):
+    grid = list(wb.worksheets[0].values)
+    header = next((i for i, row in enumerate(grid) if str(row[0] or '').strip() == 'Машина'), None)
+    if header is None:
+        raise UploadError('В финансовом файле нет заголовка «Машина».')
+    car_rows, _ = template_sections(grid, header, ctx)
+    for values in car_rows:
         name, plate, *_ = values
-        if str(name or '').startswith('Общие расходы'):
-            break
         if name is None or not str(name).strip():
             continue
         by_name, by_plate = ctx.find_vehicle(name), ctx.find_vehicle(plate)

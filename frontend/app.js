@@ -37,7 +37,7 @@ async function refresh(quiet = false) {
 }
 function syncViewingScreen() {
   const page = location.hash.replace(/^#\/?/, '').split('/')[0] || 'dashboard';
-  if (!app || document.hidden || !['dashboard','cars','car','heatmap','fuel','years','dynamics','recon','report','analytics'].includes(page) ||
+  if (!app || document.hidden || !['dashboard','cars','car','heatmap','fuel','years','dynamics','recon','report','analytics','factors','business'].includes(page) ||
       document.querySelector('#modal.open') || ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)) return;
   refresh(true).catch(e => { const button = document.getElementById('refreshData'); if (button) button.title = e.message; });
 }
@@ -247,6 +247,8 @@ const ico = (n, sz = 16) => `<svg width="${sz}" height="${sz}" viewBox="0 0 16 1
 const NAV = [
   ['dashboard', 'Дашборд', 'dash', ['admin','viewer']],
   ['analytics', 'Аналитика за всё время', 'dyn', ['admin','viewer']],
+  ['factors', 'Факторный анализ', 'recon', ['admin','viewer']],
+  ['business', 'Визуализация бизнеса', 'heat', ['admin','viewer']],
   ['cars', 'Машины', 'truck', ['admin','viewer']],
   ['heatmap', 'Тепловая карта', 'heat', ['admin','viewer']],
   ['fuel', 'Топливо', 'fuel', ['admin','viewer']],
@@ -398,7 +400,7 @@ function analyticsRecords() {
       const filled=SCHED[ym]&&!SCHED[ym].manual&&D.wdays?.[ym]?.[k]==null?filledDays(ym):daysIn(ym);
       const v=V[k]||{};
       const capacity=FiberAnalytics.capacity(ym,{from:v.from,to:v.to,filled});
-      records.push({k,ym,make:v.make||'',financial:!!a,income,expense,overhead,cost:expense==null?null:expense+overhead,
+      records.push({k,ym,make:v.make||'',financial:!!a,allocated:UI.ALLOC_ON,income,expense,overhead,cost:expense==null?null:expense+overhead,
         raw,profit:raw==null?null:(UI.ALLOC_ON?alloc[k]?.alloc??null:raw),km,days,capacity,liters,amort:v.amort??null,articles:a||{},
         noDriver:hasDays?d?.no_driver??null:null,idle:hasDays?d?.idle??null:null,planned:hasDays?d?.planned??null:null,unplanned:hasDays?d?.unplanned??null:null});
     }
@@ -575,7 +577,19 @@ PAGES.dashboard = () => {
     $('#top5').innerHTML = tbl(rows.slice(0, 5));
     $('#bot5').innerHTML = tbl(rows.slice(-5).reverse());
   } else { $('#top5').innerHTML = empty('Нет прибыли за месяц', 'Рейтинг появится после внесения данных.'); $('#bot5').innerHTML = ''; }
-  $('#content').insertAdjacentHTML('beforeend', `<section class="card panel" style="margin-top:14px"><h2>Полный рейтинг всех машин · ${detailKeys(ym).length}</h2><p>Все показатели шаблона; таблица прокручивается по горизонтали. Нажмите машину для подробностей.</p>${detailTable(ym)}${sharedDetail(ym)}</section>`);
+  const ds=dashboardSort();
+  $('#content').insertAdjacentHTML('beforeend', `<section class="card panel" style="margin-top:14px"><h2>Полный рейтинг всех машин · ${detailKeys(ym).length}</h2><p>Выберите сортировку или нажмите заголовок столбца. «Место» — место по прибыли; топ-5 выше всегда показывает лидеров по прибыли.</p><div class="dashboard-sort"><label>Сортировать по<select class="inp" id="dashboardSort">${DETAIL_COLS.map(([k,t])=>`<option value="${k}" ${ds.key===k?'selected':''}>${t}</option>`).join('')}</select></label><label>Порядок<select class="inp" id="dashboardDirection"><option value="1" ${ds.dir===1?'selected':''}>По возрастанию / А → Я</option><option value="-1" ${ds.dir===-1?'selected':''}>По убыванию / Я → А</option></select></label></div><div id="dashboardDetail">${detailTable(ym,false,true)}</div>${sharedDetail(ym)}</section>`);
+  const updateSort=(key,dir)=>{
+    UI.DASH_SORT={key,dir};try{localStorage.setItem('ft-dashboard-sort',JSON.stringify(UI.DASH_SORT));}catch(e){}
+    const scroll=$('#dashboardDetail .tbl-wrap').scrollLeft;
+    $('#dashboardDetail').innerHTML=detailTable(ym,false,true);
+    $('#dashboardDetail .tbl-wrap').scrollLeft=scroll;
+    $('#dashboardSort').value=key;$('#dashboardDirection').value=String(dir);bindDashboardHeaders();bindCarRows();
+  };
+  const bindDashboardHeaders=()=>$$('[data-dsort]').forEach(b=>b.onclick=()=>{const s=dashboardSort(),key=b.dataset.dsort;updateSort(key,s.key===key?-s.dir:['name','plate','rank','vat','gross','doc'].includes(key)?1:-1);});
+  bindDashboardHeaders();
+  $('#dashboardSort').onchange=e=>updateSort(e.target.value,['name','plate','rank','vat','gross','doc'].includes(e.target.value)?1:-1);
+  $('#dashboardDirection').onchange=e=>updateSort(dashboardSort().key,Number(e.target.value));
   bindCarRows();
   $('#xls').onclick = exportExcel;
 };
@@ -595,10 +609,17 @@ function detailRows(ym) {
       raw: profitRaw(ym,k), profit: alloc[k]?.alloc ?? null, ...a, vat: e.vat || '', gross: e.gross == null ? '' : e.gross ? 'да' : 'нет', doc: (e.documents || []).join('; ') };
   }).sort((a,b) => (b.profit ?? -Infinity) - (a.profit ?? -Infinity) || a.name.localeCompare(b.name, 'ru', {numeric:true})).map((r,i) => ({...r, rank:i+1}));
 }
-function detailTable(ym, report = false) {
-  const cols = report ? DETAIL_COLS.slice(0,11) : DETAIL_COLS, rows = detailRows(ym);
+function dashboardSort(){
+  if(!UI.DASH_SORT){try{UI.DASH_SORT=JSON.parse(localStorage.getItem('ft-dashboard-sort'));}catch(e){}}
+  const s=UI.DASH_SORT;
+  if(!s||!DETAIL_COLS.some(([k])=>k===s.key)||![1,-1].includes(s.dir))UI.DASH_SORT={key:'profit',dir:-1};
+  return UI.DASH_SORT;
+}
+function dashboardRows(ym){const s=dashboardSort();return FiberInsights.sortRows(detailRows(ym),s.key,s.dir);}
+function detailTable(ym, report = false, sortable = false) {
+  const cols = report ? DETAIL_COLS.slice(0,11) : DETAIL_COLS, rows = sortable?dashboardRows(ym):detailRows(ym),ds=sortable?dashboardSort():null;
   const strings = ['name','plate','vat','gross','doc'];
-  return `<div class="tbl-wrap full-detail"><table><thead><tr>${cols.map(([,t]) => `<th>${t}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr data-car="${esc(r.k)}">${cols.map(([k]) => `<td>${strings.includes(k) ? esc(r[k] || '—') : ['rank','km','days'].includes(k) ? int(r[k]) : detailRub(r[k])}</td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr>${cols.map(([k],i) => `<td>${i===0?'Итого':i===1?rows.length+' маш.':strings.includes(k)?'':(rows.some(r=>typeof r[k]==='number')?int(rows.reduce((s,r)=>s+(typeof r[k]==='number'?r[k]:0),0)):'—')}</td>`).join('')}</tr></tfoot></table></div>`;
+  return `<div class="tbl-wrap full-detail"><table><thead><tr>${cols.map(([k,t]) => `<th ${sortable?`aria-sort="${ds.key===k?(ds.dir===1?'ascending':'descending'):'none'}"`:''}>${sortable?`<button class="analytics-sort" data-dsort="${k}">${t} ${ds.key===k?(ds.dir===1?'↑':'↓'):'↕'}</button>`:t}</th>`).join('')}</tr></thead><tbody>${rows.map(r => `<tr data-car="${esc(r.k)}">${cols.map(([k]) => `<td>${strings.includes(k) ? esc(r[k] || '—') : ['rank','km','days'].includes(k) ? int(r[k]) : detailRub(r[k])}</td>`).join('')}</tr>`).join('')}</tbody><tfoot><tr>${cols.map(([k],i) => `<td>${i===0?'Итого':i===1?rows.length+' маш.':strings.includes(k)?'':(rows.some(r=>typeof r[k]==='number')?int(rows.reduce((s,r)=>s+(typeof r[k]==='number'?r[k]:0),0)):'—')}</td>`).join('')}</tr></tfoot></table></div>`;
 }
 function articleDetails(row) {
   const fields = DETAIL_COLS.slice(11), result = [];
@@ -1468,11 +1489,13 @@ function exportExcel() {
   const sh = f => months.map(y => f === 'total' ? fleetTotal(y) : sharedOf(y,f));
   const sum = arr => arr.reduce((s, x) => s + (x || 0), 0);
   const extra = [['трактор', 'tractor'], ['общехоз', 'gen'], ['сервис', 'service'], ['амортизация', 'amort'], ['Общий', 'total']].map(([n, f]) => [[n, 'b'], null, ...sh(f).map(v => v == null ? null : [v, f === 'total' ? 'b' : 'n']), [sum(sh(f)), 'b'], null, null]);
-  const monthly = detailRows(STATE.ym);
+  const monthly = parseHash().page==='dashboard'?dashboardRows(STATE.ym):detailRows(STATE.ym);
   const xlsx = workbook([{name: 'Все показатели месяца', freeze: true, widths: DETAIL_COLS.map(()=>110), rows: [[[`FiberTrack · ${ymLabel(STATE.ym)} · ${NET()?'без НДС':'как внесено'}`, 't']], DETAIL_COLS.map(([,t])=>[t,'h']), ...monthly.map(r=>DETAIL_COLS.map(([k])=>r[k]??null))]}, {name:'Общие расходы', rows: [[['Статья','h'],['Сумма','h']], ...[['gen','Общехоз'],['service','Сервис'],['tractor','Трактор'],['amort','Амортизация']].map(([k,t])=>[t,-sharedOf(STATE.ym,k)])]}, { name: YEAR, freeze: true, widths: [70, 80, ...months.map(() => 78), 90, 60, 90], rows: [[[`FiberTrack · прибыль по машинам, ${YEAR} (до распределения общих расходов)`, 't']], head.map(h => [h, 'h']), ...rows, [], ...extra] }]);
   download(`FiberTrack_прибыль_${YEAR}.xlsx`, xlsx);
   toast('Файл Excel сформирован');
 }
+FiberInsightsUI.register({PAGES,UI,STATE,S,V,$,$$,esc,rub,detailRub,int,dec,pct,short,ymLabel,ymShort,name,NET,ico,css,chart,axisCat,axisVal,empty,topbar,go,render,analyticsRecords,ART_NAMES,download,workbook});
+
 /* ---------- рендер ---------- */
 function render() {
   UI.editLoad=null;

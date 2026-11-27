@@ -22,7 +22,7 @@ const nav = pg => pg.$$eval('#nav a', a => a.map(x => x.firstChild ? x.textConte
   const browser = await chromium.launch(process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {});
   try {
     const owner = await login(browser, 'owner');
-    for (const p of ['dashboard', 'analytics', 'edit', 'cars', 'car/885', 'heatmap', 'fuel', 'years', 'dynamics', 'recon', 'report', 'input', 'periods', 'fleet', 'review', 'settings']) {
+    for (const p of ['dashboard', 'analytics', 'factors', 'business', 'edit', 'cars', 'car/885', 'heatmap', 'fuel', 'years', 'dynamics', 'recon', 'report', 'input', 'periods', 'fleet', 'review', 'settings']) {
       await owner.goto(`${BASE}/#/${p}`); await owner.waitForTimeout(400);
       assert.notEqual((await owner.textContent('h1')).trim(), 'Нет доступа', `владелец: ${p}`);
     }
@@ -32,6 +32,7 @@ const nav = pg => pg.$$eval('#nav a', a => a.map(x => x.firstChild ? x.textConte
     assert.ok(!(await nav(boss)).includes('Настройки'));
     await boss.goto(`${BASE}/#/analytics`); await boss.waitForSelector('#analyticsFrom');
     assert.equal((await boss.textContent('h1')).trim(), 'Аналитика за всё время');
+    for (const page of ['factors','business']) { await boss.goto(`${BASE}/#/${page}`); await boss.waitForTimeout(300); assert.notEqual((await boss.textContent('h1')).trim(), 'Нет доступа'); }
     await boss.goto(`${BASE}/#/fleet`); await boss.waitForTimeout(400);
     assert.equal((await boss.$$('[data-fk] .btn')).length, 0, 'руководитель не редактирует справочник');
     await boss.goto(`${BASE}/#/edit`); await boss.waitForTimeout(300);
@@ -41,7 +42,7 @@ const nav = pg => pg.$$eval('#nav a', a => a.map(x => x.firstChild ? x.textConte
 
     const buh = await login(browser, 'buh');
     assert.deepEqual(await nav(buh), ['Загрузка и ввод', 'Справочник машин', 'Проверить']);
-    for (const p of ['dashboard', 'analytics', 'edit', 'cars', 'car/885', 'report', 'settings', 'periods']) {
+    for (const p of ['dashboard', 'analytics', 'factors', 'business', 'edit', 'cars', 'car/885', 'report', 'settings', 'periods']) {
       await buh.goto(`${BASE}/#/${p}`); await buh.waitForTimeout(300);
       assert.equal((await buh.textContent('h1')).trim(), 'Нет доступа', `бухгалтер: ${p}`);
     }

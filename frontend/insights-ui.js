@@ -99,7 +99,15 @@ PAGES.business=()=>{
  $$('[data-scenario]').forEach(el=>el.oninput=()=>{f.scenario[el.dataset.scenario]=Number(el.value);updateScenario();});
  $('#scenarioReset').onclick=()=>{Object.keys(f.scenario).forEach(k=>f.scenario[k]=0);updateScenario();};updateScenario();
  const nodeColor=n=>css(n==='Прибыль'?'--s-up':n==='Бюджет парка'?'--s-total':n==='Дефицит доходов'||n==='Ремонт, ТО, шины'?'--s-down':n==='Топливо'||n==='Общие и амортизация'?'--warn':n==='Прочие прямые'?'--ink-3':'--s-2');
- if(m.links.length)chart($('#businessFlow'),{tooltip:{trigger:'item',formatter:p=>p.dataType==='edge'?`${esc(p.data.source)} → ${esc(p.data.target)}<br>${detailRub(p.data.value)}`:esc(p.name)},series:[{type:'sankey',left:8,right:150,top:20,bottom:20,nodeWidth:18,nodeGap:24,draggable:false,layoutIterations:40,emphasis:{focus:'adjacency'},label:{color:css('--ink-2'),fontSize:12},itemStyle:{borderWidth:0},lineStyle:{color:'gradient',opacity:.25,curveness:.5},data:m.nodes.map(n=>({...n,itemStyle:{color:nodeColor(n.name)}})),links:m.links}]});
+ if(m.links.length){
+   const sources=new Set(m.links.filter(l=>l.target==='Бюджет парка').map(l=>l.source));
+   const flowNodes=compact=>m.nodes.map(n=>({...n,depth:n.name==='Бюджет парка'?1:sources.has(n.name)?0:2,itemStyle:{color:nodeColor(n.name)},label:n.name==='Бюджет парка'?{position:'inside',rotate:90,width:140,overflow:'truncate',color:'#fff',backgroundColor:'transparent',padding:0}:{position:sources.has(n.name)?(compact?'right':'left'):(compact?'left':'right')}}));
+   chart($('#businessFlow'),{
+     tooltip:{trigger:'item',formatter:p=>p.dataType==='edge'?`${esc(p.data.source)} → ${esc(p.data.target)}<br>${detailRub(p.data.value)}`:esc(p.name)},
+     series:[{id:'business-flow',type:'sankey',left:176,right:176,top:20,bottom:20,nodeWidth:18,nodeGap:44,nodeAlign:'justify',draggable:false,layoutIterations:40,emphasis:{focus:'adjacency'},label:{color:css('--ink-2'),fontSize:12,lineHeight:16,width:158,overflow:'break',backgroundColor:css('--surface'),padding:[3,4],borderRadius:3,distance:6},itemStyle:{borderWidth:0},lineStyle:{color:'gradient',opacity:.25,curveness:.5},data:flowNodes(false),links:m.links}],
+     media:[{query:{maxWidth:680},option:{series:[{id:'business-flow',left:4,right:4,label:{width:136},data:flowNodes(true)}]}},{query:{maxWidth:440},option:{series:[{id:'business-flow',label:{fontSize:11,lineHeight:15,width:76}}]}}]
+   });
+ }
  else $('#businessFlow').innerHTML=empty('Нет сопоставимых денежных потоков','Нужны доходы, расходы и сверенная прибыль по одним и тем же машинам и месяцам.');
  if(comparable.length){
  const maxKm=Math.max(1,...comparable.map(c=>c.km||0));

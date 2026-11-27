@@ -350,3 +350,4 @@ input:focus,select:focus,button:focus-visible{outline:2px solid color-mix(in srg
 @media print{.dashboard-sort,.insights-filter-row,.factor-periods,.scenario-controls{display:none}.business-chain{grid-template-columns:repeat(3,1fr)}.business-node{break-inside:avoid}.business-flow{height:360px}}
 .factor-kpis .analytics-value{white-space:normal;overflow-wrap:anywhere}
 .factor-periods input{background:var(--surface);color:var(--ink);border:1px solid var(--border-strong);border-radius:7px;padding:8px 10px;font:inherit;width:100%;min-width:0}#factorReconciliation{padding:6px 10px;border-radius:6px;background:var(--pos-bg);color:var(--teal-ink);font-size:12px;white-space:nowrap}
+.business-flow{height:480px}

@@ -11,6 +11,18 @@ if (!process.env.FT_E2E_PASSWORD) throw new Error('Задайте FT_E2E_PASSWOR
     const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, acceptDownloads: true });
     const page = await context.newPage(), errors = [];
     page.on('pageerror', e => errors.push(e.message));
+    async function checkFlowLabels() {
+      const collisions = await page.evaluate(() => {
+        const bounds = [...document.querySelectorAll('#businessFlow svg text')].map(el => ({
+          text: el.textContent, box: el.getBoundingClientRect()
+        }));
+        return bounds.flatMap((a, i) => bounds.slice(i + 1).filter(b =>
+          a.box.left < b.box.right - .5 && b.box.left < a.box.right - .5 &&
+          a.box.top < b.box.bottom - .5 && b.box.top < a.box.bottom - .5
+        ).map(b => [a.text, b.text]));
+      });
+      assert.deepEqual(collisions, [], 'Подписи денежных потоков не должны перекрываться');
+    }
     await page.goto(BASE + '/login');
     await page.fill('#login', process.env.FT_E2E_USER || 'owner');
     await page.fill('#password', process.env.FT_E2E_PASSWORD);
@@ -58,9 +70,12 @@ if (!process.env.FT_E2E_PASSWORD) throw new Error('Задайте FT_E2E_PASSWOR
     assert.equal(await page.inputValue('#analyticsFrom'), months.at(-1));
     for (const route of ['factors', 'business']) {
       await page.goto(BASE + '/#/' + route); await page.waitForSelector('[data-insight="car"]');
-      await page.setViewportSize({ width: 360, height: 800 }); await page.waitForTimeout(200);
+      await page.setViewportSize({ width: 360, height: 800 }); await page.waitForTimeout(600);
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2), route + ' на телефоне');
-      await page.setViewportSize({ width: 1440, height: 1000 }); await page.click('#theme'); await page.click('#theme');
+      if (route === 'business') await checkFlowLabels();
+      await page.setViewportSize({ width: 1440, height: 1000 }); await page.waitForTimeout(600);
+      if (route === 'business') await checkFlowLabels();
+      await page.click('#theme'); await page.click('#theme');
     }
     assert.deepEqual(errors, [], 'Ошибки JavaScript');
     console.log('OK: сортировка, сохранение, сверка факторов, НДС/общие, сценарий, переходы и телефон');
